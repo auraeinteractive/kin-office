@@ -43,7 +43,7 @@ The bridge listens for postMessage commands from the parent:
 | `kinBridgeLogout` | - | Logout |
 | `kinBridgeGetStatus` | - | Get current status |
 | `kinBridgeNavigate` | `{path}` | Navigate to URL |
-| `kinBridgeWebDAV` | `{method, path, body, headers, requestId}` | WebDAV request |
+| `kinBridgeWebDAV` | `{method, path, body, headers, responseType, requestId}` | WebDAV request |
 | `kinBridgeOCS` | `{method, endpoint, data, requestId}` | OCS API request (v2) |
 | `kinBridgeGetOnlyOfficeContext` | `{requestId}` | Get current OnlyOffice editor context |
 | `kinBridgeOnlyOfficeSaveAs` | `{saveData, requestId}` | Trigger Nextcloud OnlyOffice Save As |
@@ -130,10 +130,13 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_p
 - Optional storage volume override is supported with query param `kin_nextcloud_volume=<VolumeName>` (default `Nextcloud:`)
 - Optional file open override is supported with query param `kin_open_path=<KinPath>`
 - Optional assign target override is supported with query param `kin_nextcloud_assign_target=<KinPath>` (default `Home:.Mounts/nextcloud`)
+- File dialogs default to `Mountlist:` so users can choose `Home:`, `System:`, or assigned volumes
 - Since Nextcloud is same-origin (proxied), the kinnextcloud app can access iframe content
 - Nextcloud uses OCS API v2 (`/ocs/v2.php/`) unlike OwnCloud's v1
 - After successful login, Nextcloud redirects to `/index.php/apps/dashboard/` (not files)
 - Office launchers expose Storage menu actions to connect/status/disconnect the `Nextcloud:` assign
+- Storage connect/disconnect requests workspace directory refresh so desktop/file windows update mount visibility
+- Office launchers can import `Home:`/`System:` files into Nextcloud for editing and can Save/Save As back to Kin paths
 
 ### Recommended storage integration (assign + external WebDAV mount)
 

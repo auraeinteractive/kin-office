@@ -226,7 +226,18 @@
 
     // --- WebDAV ---
 
-    function handleWebDAV(method, path, body, extraHeaders, source, requestId) {
+    function arrayBufferToBase64(buffer) {
+        var bytes = new Uint8Array(buffer || new ArrayBuffer(0));
+        var chunk = 0x8000;
+        var binary = '';
+        for (var i = 0; i < bytes.length; i += chunk) {
+            var slice = bytes.subarray(i, i + chunk);
+            binary += String.fromCharCode.apply(null, slice);
+        }
+        return btoa(binary);
+    }
+
+    function handleWebDAV(method, path, body, extraHeaders, responseType, source, requestId) {
         var user = getLoggedInUser() || 'admin';
         var url = path || '/remote.php/dav/files/' + user;
         var headers = {
@@ -245,12 +256,28 @@
             headers: headers,
             body: body || null
         }).then(function(resp) {
+            var contentType = resp.headers && resp.headers.get ? (resp.headers.get('content-type') || '') : '';
+            if (responseType === 'base64') {
+                return resp.arrayBuffer().then(function(buffer) {
+                    source.postMessage({
+                        type: 'kinBridgeWebDAVResponse',
+                        requestId: requestId,
+                        status: resp.status,
+                        bodyBase64: arrayBufferToBase64(buffer),
+                        contentType: contentType,
+                        isBase64: true,
+                        ok: resp.ok
+                    }, '*');
+                });
+            }
             return resp.text().then(function(text) {
                 source.postMessage({
                     type: 'kinBridgeWebDAVResponse',
                     requestId: requestId,
                     status: resp.status,
                     body: text,
+                    contentType: contentType,
+                    isBase64: false,
                     ok: resp.ok
                 }, '*');
             });
@@ -376,7 +403,7 @@
                 break;
 
             case 'kinBridgeWebDAV':
-                handleWebDAV(data.method, data.path, data.body, data.headers, event.source, data.requestId);
+                handleWebDAV(data.method, data.path, data.body, data.headers, data.responseType, event.source, data.requestId);
                 break;
 
             case 'kinBridgeOCS':
