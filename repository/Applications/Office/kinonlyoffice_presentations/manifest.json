@@ -1,0 +1,8 @@
+{
+  "id": "kinonlyoffice_presentations",
+  "displayName": "OnlyOffice Presentations",
+  "version": "1",
+  "entry": "index.html",
+  "category": "Office",
+  "published": true
+}

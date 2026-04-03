@@ -22,10 +22,12 @@ Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
 - `nginx/certs/` - Self-signed SSL certificate (shared with kinoffice)
 - `nginx/kin-bridge.js` - JavaScript bridge injected into Nextcloud pages
 
-### kinnextcloud App
-- `repository/Applications/Internet/kinnextcloud/`
-- Communicates with Nextcloud via postMessage bridge
-- Toolbar for login/logout/refresh controls
+### Kin Apps
+- `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app
+- `repository/Applications/Office/kinonlyoffice_documents/` - launcher for new text documents
+- `repository/Applications/Office/kinonlyoffice_spreadsheets/` - launcher for new spreadsheets
+- `repository/Applications/Office/kinonlyoffice_presentations/` - launcher for new presentations
+- All apps communicate with Nextcloud via postMessage bridge
 
 ## kin-bridge.js API
 
@@ -94,7 +96,10 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_p
 - `nginx/certs/localhost.crt` - SSL certificate
 - `nginx/certs/localhost.key` - SSL private key
 - `nginx/kin-bridge.js` - Nextcloud postMessage bridge
-- `repository/Applications/Internet/kinnextcloud/` - Kin app source
+- `repository/Applications/Internet/kinnextcloud/` - main Kin app source
+- `repository/Applications/Office/kinonlyoffice_documents/` - Office Documents app source
+- `repository/Applications/Office/kinonlyoffice_spreadsheets/` - Office Spreadsheets app source
+- `repository/Applications/Office/kinonlyoffice_presentations/` - Office Presentations app source
 - `build-apps.sh` - Build/install script
 - `.config.ini` - Kin build path (gitignored)
 
