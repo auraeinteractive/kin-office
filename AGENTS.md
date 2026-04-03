@@ -29,6 +29,7 @@ Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
 - `repository/Applications/Office/kinonlyoffice_documents/` - launcher for new text documents
 - `repository/Applications/Office/kinonlyoffice_spreadsheets/` - launcher for new spreadsheets
 - `repository/Applications/Office/kinonlyoffice_presentations/` - launcher for new presentations
+- `repository/Applications/Office/kinonlyoffice_common/` - shared launcher logic for OnlyOffice apps
 - All apps communicate with Nextcloud via postMessage bridge
 
 ## kin-bridge.js API
@@ -42,14 +43,20 @@ The bridge listens for postMessage commands from the parent:
 | `kinBridgeLogout` | - | Logout |
 | `kinBridgeGetStatus` | - | Get current status |
 | `kinBridgeNavigate` | `{path}` | Navigate to URL |
-| `kinBridgeWebDAV` | `{method, path, body, requestId}` | WebDAV request |
+| `kinBridgeWebDAV` | `{method, path, body, headers, requestId}` | WebDAV request |
 | `kinBridgeOCS` | `{method, endpoint, data, requestId}` | OCS API request (v2) |
+| `kinBridgeGetOnlyOfficeContext` | `{requestId}` | Get current OnlyOffice editor context |
+| `kinBridgeOnlyOfficeSaveAs` | `{saveData, requestId}` | Trigger Nextcloud OnlyOffice Save As |
 
 The bridge responds with:
 - `kinBridgeReady` - Bridge initialized
 - `kinBridgeHandshakeResponse` - Handshake result
 - `kinBridgeStatus` / `kinBridgeStatusChange` - Status updates
 - `kinBridgeWebDAVResponse` / `kinBridgeOCSResponse` - API responses
+- `kinBridgeOnlyOfficeContext` - OnlyOffice file context (`fileId`, `filePath`, `inframe`)
+- `kinBridgeOnlyOfficeSaveAsResult` - Save As command accepted/rejected
+- `kinBridgeOnlyOfficeRequestSaveAs` - Forwarded editor Save As request to parent app
+- `kinBridgeOnlyOfficeEvent` - Forwarded editor events (`editorRequest*`)
 - `kinBridgeError` - Error messages
 
 ## Commands
@@ -120,9 +127,27 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_p
 - OnlyOffice is proxied both as dedicated `:5003` and same-origin `https://<host>:5002/ds/`
 - Kin apps build iframe URLs dynamically from current browser hostname (no hardcoded `localhost`)
 - Optional override is supported with query param `nextcloud_host=<host>`
+- Optional storage volume override is supported with query param `kin_nextcloud_volume=<VolumeName>` (default `Nextcloud:`)
+- Optional file open override is supported with query param `kin_open_path=<KinPath>`
+- Optional assign target override is supported with query param `kin_nextcloud_assign_target=<KinPath>` (default `Home:.Mounts/nextcloud`)
 - Since Nextcloud is same-origin (proxied), the kinnextcloud app can access iframe content
 - Nextcloud uses OCS API v2 (`/ocs/v2.php/`) unlike OwnCloud's v1
 - After successful login, Nextcloud redirects to `/index.php/apps/dashboard/` (not files)
+- Office launchers expose Storage menu actions to connect/status/disconnect the `Nextcloud:` assign
+
+### Recommended storage integration (assign + external WebDAV mount)
+
+Use Kin `assign` with a host-side WebDAV mount so Kin dialogs can open/save via `Nextcloud:`.
+
+1. Mount the user's Nextcloud WebDAV into the user's `Home:` backing tree (for example under `Home:.Mounts/nextcloud`).
+2. In KinDOS, create a user assign:
+
+```bash
+assign Nextcloud: Home:.Mounts/nextcloud
+```
+
+3. Open `Mountlist:` in Kin file dialogs and verify `Nextcloud:` appears.
+4. OnlyOffice launcher menus (`Open`, `Save`, `Save As`) then work against `Nextcloud:` paths.
 
 ### LAN troubleshooting
 

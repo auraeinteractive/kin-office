@@ -79,6 +79,25 @@
         };
     }
 
+    function getOnlyOfficeContext() {
+        var context = {
+            available: false,
+            fileId: null,
+            filePath: null,
+            inframe: false,
+            url: window.location.href
+        };
+        if (!window.OCA || !window.OCA.Onlyoffice) {
+            return context;
+        }
+        var oo = window.OCA.Onlyoffice;
+        context.available = true;
+        context.fileId = oo.fileId || null;
+        context.filePath = oo.filePath || null;
+        context.inframe = !!oo.inframe;
+        return context;
+    }
+
     // --- Login attempt tracking (survives page reloads) ---
 
     function getLoginAttempts() {
@@ -207,17 +226,23 @@
 
     // --- WebDAV ---
 
-    function handleWebDAV(method, path, body, source, requestId) {
+    function handleWebDAV(method, path, body, extraHeaders, source, requestId) {
         var user = getLoggedInUser() || 'admin';
         var url = path || '/remote.php/dav/files/' + user;
+        var headers = {
+            'Content-Type': 'application/xml',
+            'Depth': '1'
+        };
+        if (extraHeaders && typeof extraHeaders === 'object') {
+            Object.keys(extraHeaders).forEach(function(key) {
+                headers[key] = extraHeaders[key];
+            });
+        }
 
         fetch(url, {
             method: method || 'PROPFIND',
             credentials: 'same-origin',
-            headers: {
-                'Content-Type': 'application/xml',
-                'Depth': '1'
-            },
+            headers: headers,
             body: body || null
         }).then(function(resp) {
             return resp.text().then(function(text) {
@@ -279,7 +304,26 @@
 
     window.addEventListener('message', function(event) {
         var data = event.data;
-        if (!data || !data.type) return;
+        if (!data) return;
+
+        if (data.method && typeof data.method === 'string' && data.method.indexOf('editorRequest') === 0) {
+            if (data.method === 'editorRequestSaveAs') {
+                postToParent({
+                    type: 'kinBridgeOnlyOfficeRequestSaveAs',
+                    saveData: data.param || {},
+                    context: getOnlyOfficeContext()
+                });
+            }
+            postToParent({
+                type: 'kinBridgeOnlyOfficeEvent',
+                method: data.method,
+                payload: data.param || null,
+                context: getOnlyOfficeContext()
+            });
+            return;
+        }
+
+        if (!data.type) return;
 
         var status = getStatus();
 
@@ -332,11 +376,50 @@
                 break;
 
             case 'kinBridgeWebDAV':
-                handleWebDAV(data.method, data.path, data.body, event.source, data.requestId);
+                handleWebDAV(data.method, data.path, data.body, data.headers, event.source, data.requestId);
                 break;
 
             case 'kinBridgeOCS':
                 handleOCS(data.method, data.endpoint, data.data, event.source, data.requestId);
+                break;
+
+            case 'kinBridgeGetOnlyOfficeContext':
+                var context = getOnlyOfficeContext();
+                event.source.postMessage({
+                    type: 'kinBridgeOnlyOfficeContext',
+                    requestId: data.requestId,
+                    context: context,
+                    fileId: context.fileId,
+                    filePath: context.filePath,
+                    inframe: context.inframe
+                }, '*');
+                break;
+
+            case 'kinBridgeOnlyOfficeSaveAs':
+                if (window.OCA && window.OCA.Onlyoffice && typeof window.OCA.Onlyoffice.editorSaveAs === 'function') {
+                    try {
+                        window.OCA.Onlyoffice.editorSaveAs(data.saveData || {});
+                        event.source.postMessage({
+                            type: 'kinBridgeOnlyOfficeSaveAsResult',
+                            requestId: data.requestId,
+                            ok: true
+                        }, '*');
+                    } catch (saveErr) {
+                        event.source.postMessage({
+                            type: 'kinBridgeOnlyOfficeSaveAsResult',
+                            requestId: data.requestId,
+                            ok: false,
+                            error: saveErr && saveErr.message ? saveErr.message : 'OnlyOffice Save As failed'
+                        }, '*');
+                    }
+                } else {
+                    event.source.postMessage({
+                        type: 'kinBridgeOnlyOfficeSaveAsResult',
+                        requestId: data.requestId,
+                        ok: false,
+                        error: 'OnlyOffice context unavailable'
+                    }, '*');
+                }
                 break;
         }
     });
