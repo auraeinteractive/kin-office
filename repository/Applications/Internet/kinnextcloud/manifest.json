@@ -1,0 +1,8 @@
+{
+  "id": "kinnextcloud",
+  "displayName": "Nextcloud",
+  "version": "1",
+  "entry": "index.html",
+  "category": "Internet",
+  "published": true
+}
