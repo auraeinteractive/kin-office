@@ -1,7 +1,7 @@
 # Project: Nextcloud - Self-Hosted Nextcloud with Kin Integration
 
 ## Goal
-Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `https://localhost:5002` using a self-signed certificate, with integration into Kin OS.
+Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `https://<host>:5002` using a self-signed certificate, with integration into Kin OS.
 
 ## Architecture
 ```
@@ -12,6 +12,8 @@ kinnextcloud app (iframe) -- postMessage --> kin-bridge.js (injected)
     |                                               |
     v                                               v
 Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
+         |
+         +-- /ds/ ---------------> OnlyOffice
 ```
 
 ## Components
@@ -81,9 +83,15 @@ docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 
 docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https"
 ```
 
+For dynamic LAN/browser host access (no hardcoded hostname/IP):
+```bash
+docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value "*"
+docker exec --user www-data nextcloud php occ config:system:delete overwritehost
+```
+
 OnlyOffice connector configuration (auto-configured on first setup):
 ```bash
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value "http://onlyoffice/"
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value "/ds/"
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value "http://onlyoffice/"
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value "http://nextcloud/"
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value "true"
@@ -108,9 +116,18 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_p
 - Nginx overrides `X-Frame-Options` to `ALLOWALL` for iframe embedding
 - CSP is relaxed to allow inline scripts and iframe embedding
 - kin-bridge.js is served at `/kin-bridge.js` and injected into Nextcloud pages
+- Nginx uses `server_name _` and forwards `$http_host` so requests work for LAN hostnames/IPs
+- OnlyOffice is proxied both as dedicated `:5003` and same-origin `https://<host>:5002/ds/`
+- Kin apps build iframe URLs dynamically from current browser hostname (no hardcoded `localhost`)
+- Optional override is supported with query param `nextcloud_host=<host>`
 - Since Nextcloud is same-origin (proxied), the kinnextcloud app can access iframe content
 - Nextcloud uses OCS API v2 (`/ocs/v2.php/`) unlike OwnCloud's v1
 - After successful login, Nextcloud redirects to `/index.php/apps/dashboard/` (not files)
+
+### LAN troubleshooting
+
+- If the app opens but browser shows host unreachable, verify the hostname resolves to the server LAN IP.
+- Self-signed cert host verification can block access when hostname/IP does not match the cert.
 
 ## Differences from kinoffice (OwnCloud)
 

@@ -3,7 +3,34 @@
  * Uses iframe with kin-bridge.js for session-based login
  */
 
-const NEXTCLOUD_URL = 'https://localhost:5002';
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const DEFAULT_NEXTCLOUD_HOST = window.location.hostname;
+
+function isLoopbackHost(host) {
+    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
+}
+
+function resolveNextcloudHost() {
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
+    if (override) {
+        return override;
+    }
+
+    try {
+        localStorage.removeItem('kin.nextcloud.host');
+    } catch (error) {
+        // ignore storage failures
+    }
+
+    if (!isLoopbackHost(window.location.hostname)) {
+        return window.location.hostname;
+    }
+
+    return DEFAULT_NEXTCLOUD_HOST;
+}
+
+const NEXTCLOUD_ORIGIN = `https://${resolveNextcloudHost()}:5002`;
 const ORIGIN = window.location.origin;
 
 const iframeEl = document.getElementById('iframe');
@@ -125,4 +152,5 @@ iframeEl.onload = () => {
 // --- Init ---
 
 registerMenus();
+iframeEl.src = NEXTCLOUD_ORIGIN;
 console.log('[kinnextcloud] App loaded');

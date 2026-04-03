@@ -1,6 +1,34 @@
 const TARGET_PATH = '/index.php/apps/onlyoffice/new?name=New%20document.docx&dir=%2F';
 const ONLYOFFICE_PATH = '/index.php/apps/onlyoffice/';
 const MENU_LOGOUT_COMMAND = 'onlyoffice.documents.logout';
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const DEFAULT_NEXTCLOUD_HOST = window.location.hostname;
+
+function isLoopbackHost(host) {
+    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
+}
+
+function resolveNextcloudHost() {
+    const params = new URLSearchParams(window.location.search);
+    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
+    if (override) {
+        return override;
+    }
+
+    try {
+        localStorage.removeItem('kin.nextcloud.host');
+    } catch (error) {
+        // ignore storage failures
+    }
+
+    if (!isLoopbackHost(window.location.hostname)) {
+        return window.location.hostname;
+    }
+
+    return DEFAULT_NEXTCLOUD_HOST;
+}
+
+const NEXTCLOUD_ORIGIN = `https://${resolveNextcloudHost()}:5002`;
 
 const iframeEl = document.getElementById('iframe');
 const ORIGIN = window.location.origin;
@@ -132,3 +160,4 @@ iframeEl.onload = () => {
 };
 
 registerMenus();
+iframeEl.src = NEXTCLOUD_ORIGIN + TARGET_PATH;
