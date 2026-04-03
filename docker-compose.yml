@@ -17,12 +17,24 @@ services:
     networks:
       - nextcloud_network
 
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice
+    restart: unless-stopped
+    environment:
+      - JWT_ENABLED=false
+      - ALLOW_PRIVATE_IP_ADDRESS=true
+      - ALLOW_META_IP_ADDRESS=true
+    networks:
+      - nextcloud_network
+
   nginx:
     image: nginx:latest
     container_name: nginx_nextcloud_proxy
     restart: unless-stopped
     ports:
       - "5002:443"
+      - "5003:5003"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/certs:/etc/nginx/certs:ro

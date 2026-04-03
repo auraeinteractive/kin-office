@@ -17,9 +17,9 @@ Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
 ## Components
 
 ### Docker Setup
-- `docker-compose.yml` - Nextcloud + Nginx services
+- `docker-compose.yml` - Nextcloud + Nginx + OnlyOffice services
 - `nginx/conf.d/nextcloud.conf` - Nginx config with header overrides for iframe embedding
-- `nginx/certs/` - Self-signed SSL certificate
+- `nginx/certs/` - Self-signed SSL certificate (shared with kinoffice)
 - `nginx/kin-bridge.js` - JavaScript bridge injected into Nextcloud pages
 
 ### kinnextcloud App
@@ -77,6 +77,14 @@ Nextcloud must trust the proxy:
 ```bash
 docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "nginx_nextcloud_proxy"
 docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https"
+```
+
+OnlyOffice connector configuration (auto-configured on first setup):
+```bash
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value "http://onlyoffice/"
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value "http://onlyoffice/"
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value "http://nextcloud/"
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value "true"
 ```
 
 ## Files
