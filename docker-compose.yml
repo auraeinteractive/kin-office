@@ -42,7 +42,9 @@ services:
     depends_on:
       - nextcloud
     networks:
-      - nextcloud_network
+      nextcloud_network:
+        aliases:
+          - katana-arphicia
 
 networks:
   nextcloud_network:

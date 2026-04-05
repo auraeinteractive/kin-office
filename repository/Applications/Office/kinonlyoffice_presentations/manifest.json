@@ -1,7 +1,7 @@
 {
   "id": "kinonlyoffice_presentations",
   "displayName": "OnlyOffice Presentations",
-  "version": "4",
+  "version": "11",
   "entry": "index.html",
   "category": "Office",
   "published": true

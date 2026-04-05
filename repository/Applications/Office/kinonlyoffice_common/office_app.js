@@ -114,6 +114,8 @@ export function bootstrapOnlyOfficeApp(config) {
 
     let loginInProgress = false;
     let launchedTarget = false;
+    let launchInProgress = false;
+    let kinOpenPathAttempted = false;
     let bridgeUser = null;
     let currentOnlyOfficePath = null;
     let currentKinPath = null;
@@ -130,6 +132,57 @@ export function bootstrapOnlyOfficeApp(config) {
             window.parent.postMessage(message, ORIGIN);
         } catch (_error) {
             // ignore
+        }
+    }
+
+    function ensureBusyOverlay() {
+        var overlay = document.getElementById('kinOnlyOfficeBusyOverlay');
+        if (overlay) return overlay;
+        overlay = document.createElement('div');
+        overlay.id = 'kinOnlyOfficeBusyOverlay';
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.zIndex = '99999';
+        overlay.style.display = 'none';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.background = 'rgba(0,0,0,0.32)';
+
+        var card = document.createElement('div');
+        card.style.padding = '14px 18px';
+        card.style.borderRadius = '10px';
+        card.style.background = 'rgba(20,20,20,0.9)';
+        card.style.color = '#fff';
+        card.style.fontFamily = 'monospace';
+        card.style.fontSize = '13px';
+        card.style.boxShadow = '0 10px 26px rgba(0,0,0,0.35)';
+        card.textContent = 'Working...';
+        overlay.appendChild(card);
+
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    function showBusy(message) {
+        var overlay = ensureBusyOverlay();
+        if (overlay.firstChild) {
+            overlay.firstChild.textContent = String(message || 'Working...');
+        }
+        overlay.style.display = 'flex';
+    }
+
+    function hideBusy() {
+        var overlay = document.getElementById('kinOnlyOfficeBusyOverlay');
+        if (!overlay) return;
+        overlay.style.display = 'none';
+    }
+
+    async function withBusy(message, operation) {
+        showBusy(message);
+        try {
+            return await operation();
+        } finally {
+            hideBusy();
         }
     }
 
@@ -182,9 +235,14 @@ export function bootstrapOnlyOfficeApp(config) {
 
     function sendToBridge(type, payload) {
         try {
+            if (!iframeEl.contentWindow) {
+                throw new Error('Bridge iframe is not ready');
+            }
             iframeEl.contentWindow.postMessage(Object.assign({ type }, payload || {}), '*');
+            return true;
         } catch (error) {
             log('Bridge send failed:', error);
+            return false;
         }
     }
 
@@ -197,7 +255,12 @@ export function bootstrapOnlyOfficeApp(config) {
                 reject(new Error('Bridge request timed out: ' + type));
             }, timeout);
             pendingBridgeRequests.set(reqId, { resolve, reject, timer, type });
-            sendToBridge(type, Object.assign({}, payload || {}, { requestId: reqId }));
+            const sent = sendToBridge(type, Object.assign({}, payload || {}, { requestId: reqId }));
+            if (!sent) {
+                pendingBridgeRequests.delete(reqId);
+                clearTimeout(timer);
+                reject(new Error('Bridge iframe is not ready for ' + type));
+            }
         });
     }
 
@@ -426,14 +489,18 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function connectNextcloudVolume() {
-        await ensureNextcloudAssign();
-        requestWorkspaceRefresh();
-        await showNextcloudVolumeStatus();
+        await withBusy('Connecting storage...', async function() {
+            await ensureNextcloudAssign();
+            requestWorkspaceRefresh();
+            await showNextcloudVolumeStatus();
+        });
     }
 
     async function disconnectNextcloudVolume() {
-        await runAssignCommand('remove');
-        requestWorkspaceRefresh();
+        await withBusy('Disconnecting storage...', async function() {
+            await runAssignCommand('remove');
+            requestWorkspaceRefresh();
+        });
         await openAlert('Removed assign for ' + nextcloudVolumeLabel + '.', 'Nextcloud Volume');
     }
 
@@ -448,22 +515,179 @@ export function bootstrapOnlyOfficeApp(config) {
     async function webDavRequest(method, nextcloudPath, options) {
         const requestOptions = options || {};
         const path = requestOptions.path || buildWebDavPath(nextcloudPath);
-        const response = await bridgeRequest('kinBridgeWebDAV', {
-            method,
-            path,
-            body: requestOptions.body || null,
-            headers: requestOptions.headers || {},
-            responseType: requestOptions.responseType || 'text'
-        });
-        return response;
+        let lastError = null;
+        const attempts = requestOptions.retryCount || 2;
+        for (let index = 0; index < attempts; index += 1) {
+            try {
+                const response = await bridgeRequest('kinBridgeWebDAV', {
+                    method,
+                    path,
+                    body: requestOptions.body || null,
+                    headers: requestOptions.headers || {},
+                    responseType: requestOptions.responseType || 'text'
+                }, requestOptions.timeoutMs || 60000);
+                return response;
+            } catch (error) {
+                lastError = error;
+                const isTimeout = error && String(error.message || '').indexOf('timed out') !== -1;
+                if (!isTimeout || index >= attempts - 1) {
+                    throw error;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 300));
+            }
+        }
+        throw lastError || new Error('WebDAV request failed');
     }
 
     async function readNextcloudFileBytes(nextcloudPath) {
-        const response = await webDavRequest('GET', nextcloudPath, { responseType: 'base64' });
+        const response = await webDavRequest('GET', nextcloudPath, {
+            responseType: 'base64',
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache'
+            }
+        });
         if (!response || response.status < 200 || response.status >= 300) {
             throw new Error('Could not read Nextcloud file (HTTP ' + (response ? response.status : 'unknown') + ')');
         }
         return base64ToBytes(response.bodyBase64 || '');
+    }
+
+    function waitMs(duration) {
+        return new Promise((resolve) => setTimeout(resolve, duration));
+    }
+
+    function parseXmlFirstTag(xmlText, tagNames) {
+        const text = String(xmlText || '');
+        for (let index = 0; index < tagNames.length; index += 1) {
+            const tag = String(tagNames[index] || '');
+            if (!tag) continue;
+            const expr = new RegExp('<(?:[a-zA-Z0-9_\\-]+:)?' + tag + '>([^<]*)</(?:[a-zA-Z0-9_\\-]+:)?' + tag + '>', 'i');
+            const match = text.match(expr);
+            if (match && typeof match[1] === 'string') {
+                return match[1].trim();
+            }
+        }
+        return '';
+    }
+
+    function normalizeNextcloudPath(path) {
+        let value = String(path || '').trim();
+        if (!value) return '';
+        if (value[0] !== '/') value = '/' + value;
+        try {
+            value = decodeURIComponent(value);
+        } catch (_error) {
+            // keep original when decoding fails
+        }
+        return value;
+    }
+
+    function sameNextcloudPath(a, b) {
+        return normalizeNextcloudPath(a) === normalizeNextcloudPath(b);
+    }
+
+    async function getNextcloudFileFingerprint(nextcloudPath) {
+        const body = [
+            '<?xml version="1.0"?>',
+            '<d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">',
+            '  <d:prop><d:getetag/><d:getcontentlength/><d:getlastmodified/><oc:size/></d:prop>',
+            '</d:propfind>'
+        ].join('');
+        const response = await webDavRequest('PROPFIND', nextcloudPath, {
+            body,
+            headers: {
+                Depth: '0',
+                'Content-Type': 'application/xml'
+            },
+            timeoutMs: 30000,
+            retryCount: 2
+        });
+        if (!response || response.status < 200 || response.status >= 400) {
+            throw new Error('Could not read file metadata (HTTP ' + (response ? response.status : 'unknown') + ')');
+        }
+
+        const xml = String(response.body || '');
+        const etag = parseXmlFirstTag(xml, ['getetag']);
+        const sizeRaw = parseXmlFirstTag(xml, ['getcontentlength', 'size']);
+        const mtime = parseXmlFirstTag(xml, ['getlastmodified']);
+        const size = sizeRaw ? String(sizeRaw).trim() : '';
+
+        return {
+            etag,
+            size,
+            mtime,
+            signature: [etag || '', size || '', mtime || ''].join('|')
+        };
+    }
+
+    function isFingerprintDifferent(before, after) {
+        if (!before || !after) return false;
+        return String(before.signature || '') !== String(after.signature || '');
+    }
+
+    function isForceSaveCommandAccepted(result) {
+        if (!result) return false;
+        if (result.ok === false) return false;
+        if (!result.body) return !!result.ok;
+        try {
+            const parsed = JSON.parse(String(result.body || '{}'));
+            if (typeof parsed.error === 'number') {
+                return parsed.error === 0;
+            }
+            return !!result.ok;
+        } catch (_error) {
+            return !!result.ok;
+        }
+    }
+
+    async function flushOnlyOfficeEdits(sourcePath) {
+        const context = await getOnlyOfficeContext();
+        const contextPath = context && context.filePath ? String(context.filePath) : '';
+        if (!contextPath || !sourcePath || !sameNextcloudPath(contextPath, sourcePath)) {
+            return;
+        }
+
+        let before = null;
+        try {
+            before = await getNextcloudFileFingerprint(sourcePath);
+        } catch (_error) {
+            before = null;
+        }
+
+        let forceSaveAccepted = false;
+        try {
+            const result = await bridgeRequest('kinBridgeOnlyOfficeForceSave', {}, 30000);
+            forceSaveAccepted = isForceSaveCommandAccepted(result);
+            if (!forceSaveAccepted) {
+                log('OnlyOffice force-save was not accepted; continuing with best-effort export');
+            }
+        } catch (error) {
+            log('OnlyOffice force-save request failed; continuing with best-effort export:', error && error.message ? error.message : error);
+        }
+
+        const maxPolls = before ? 2 : 1;
+        for (let index = 0; index < maxPolls; index += 1) {
+            await waitMs(900);
+            if (!before) {
+                if (index >= 0) {
+                    return;
+                }
+                continue;
+            }
+            try {
+                const after = await getNextcloudFileFingerprint(sourcePath);
+                if (isFingerprintDifferent(before, after)) {
+                    return;
+                }
+            } catch (_error) {
+                // continue polling
+            }
+        }
+
+        if (forceSaveAccepted) {
+            log('Timed out waiting for Nextcloud metadata change after force-save; proceeding anyway');
+        }
     }
 
     async function writeKinBinaryFile(kinPath, bytes) {
@@ -477,8 +701,17 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function saveNextcloudFileToKinPath(sourceNextcloudPath, targetKinPath) {
+        await flushOnlyOfficeEdits(sourceNextcloudPath);
         const bytes = await readNextcloudFileBytes(sourceNextcloudPath);
         await writeKinBinaryFile(targetKinPath, bytes);
+        try {
+            const verifyBytes = await readKinFileBytes(targetKinPath);
+            if (verifyBytes && verifyBytes.length !== bytes.length) {
+                log('Save verification length mismatch', bytes.length, verifyBytes.length, targetKinPath);
+            }
+        } catch (error) {
+            log('Save verification readback failed:', error && error.message ? error.message : error);
+        }
     }
 
     async function readKinFileBytes(kinPath) {
@@ -486,9 +719,16 @@ export function bootstrapOnlyOfficeApp(config) {
         if (!route) {
             throw new Error('Open from this volume is not supported yet: ' + kinPath);
         }
-        const response = await fetch(route, {
+        const separator = route.indexOf('?') === -1 ? '?' : '&';
+        const noCacheRoute = route + separator + '_kin_ts=' + Date.now();
+        const response = await fetch(noCacheRoute, {
             method: 'GET',
-            credentials: 'same-origin'
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache'
+            }
         });
         if (!response.ok) {
             throw new Error('Could not read Kin file (HTTP ' + response.status + ')');
@@ -497,25 +737,14 @@ export function bootstrapOnlyOfficeApp(config) {
         return new Uint8Array(buffer);
     }
 
-    async function ensureNextcloudImportDir() {
-        const response = await webDavRequest('MKCOL', '/.KinImports', {
-            headers: {
-                'Content-Type': 'application/xml'
-            }
-        });
-        if (!response) return;
-        if (response.status === 201 || response.status === 405 || response.status === 301 || response.status === 302) return;
-        if (response.status >= 200 && response.status < 300) return;
-        if (response.status === 409) return;
-        throw new Error('Could not prepare Nextcloud import folder (HTTP ' + response.status + ')');
-    }
-
     async function writeNextcloudFileBytes(nextcloudPath, bytes) {
         const response = await webDavRequest('PUT', nextcloudPath, {
             body: bytes,
             headers: {
                 'Content-Type': 'application/octet-stream'
-            }
+            },
+            timeoutMs: 60000,
+            retryCount: 2
         });
         if (!response || (response.status !== 201 && response.status !== 204)) {
             throw new Error('Could not upload file to Nextcloud (HTTP ' + (response ? response.status : 'unknown') + ')');
@@ -524,9 +753,9 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function importKinFileToNextcloud(kinPath) {
         const bytes = await readKinFileBytes(kinPath);
-        await ensureNextcloudImportDir();
         const name = kinPathBaseName(kinPath) || ('Imported-' + Date.now() + '.bin');
-        const nextcloudPath = '/.KinImports/' + Date.now() + '-' + name;
+        const safeName = name.replace(/[\\/]+/g, '_');
+        const nextcloudPath = '/' + Date.now() + '-' + safeName;
         await writeNextcloudFileBytes(nextcloudPath, bytes);
         return nextcloudPath;
     }
@@ -589,7 +818,7 @@ export function bootstrapOnlyOfficeApp(config) {
         currentOnlyOfficePath = nextcloudPath;
         launchedTarget = true;
         sendToBridge('kinBridgeNavigate', {
-            path: '/index.php/apps/onlyoffice/' + fileId + '?filePath=' + encodeURIComponent(nextcloudPath) + '&inframe=true'
+            path: '/index.php/apps/onlyoffice/' + fileId + '?filePath=' + encodeURIComponent(nextcloudPath)
         });
     }
 
@@ -630,7 +859,9 @@ export function bootstrapOnlyOfficeApp(config) {
         try {
             if (command === MENU_OPEN_COMMAND) {
                 const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
-                await openKinPath(kinPath);
+                await withBusy('Opening document...', async function() {
+                    await openKinPath(kinPath);
+                });
                 return;
             }
 
@@ -654,7 +885,9 @@ export function bootstrapOnlyOfficeApp(config) {
                 const sourcePath = context && context.filePath ? String(context.filePath) : currentOnlyOfficePath;
                 const currentKinIsExternal = currentKinPath && !toNextcloudPath(currentKinPath, nextcloudVolumeLabel);
                 if (currentKinIsExternal && sourcePath) {
-                    await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
+                    await withBusy('Saving to Kin path...', async function() {
+                        await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
+                    });
                     await openAlert('Saved to ' + currentKinPath + '.', 'Saved');
                 } else if (context && context.filePath) {
                     await openAlert('OnlyOffice autosaves this document in Nextcloud.\n\nCurrent file: ' + context.filePath, 'Saved');
@@ -679,14 +912,20 @@ export function bootstrapOnlyOfficeApp(config) {
                 });
                 const targetPath = toNextcloudPath(targetKinPath, nextcloudVolumeLabel);
                 if (!targetPath) {
-                    await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
+                    await withBusy('Saving to Kin path...', async function() {
+                        await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
+                    });
                     currentKinPath = targetKinPath;
                     await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                     return;
                 }
-                await copyNextcloudFile(sourcePath, targetPath);
+                await withBusy('Saving copy in Nextcloud...', async function() {
+                    await copyNextcloudFile(sourcePath, targetPath);
+                });
                 currentKinPath = targetKinPath;
-                await openNextcloudPath(targetPath);
+                await withBusy('Opening saved file...', async function() {
+                    await openNextcloudPath(targetPath);
+                });
             }
         } catch (error) {
             if (error && error.message === 'cancel') return;
@@ -711,7 +950,9 @@ export function bootstrapOnlyOfficeApp(config) {
                     await openAlert('Open a Nextcloud document first, then use Save As.');
                     return;
                 }
-                await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
+                await withBusy('Saving to Kin path...', async function() {
+                    await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
+                });
                 currentKinPath = targetKinPath;
                 await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                 return;
@@ -721,17 +962,21 @@ export function bootstrapOnlyOfficeApp(config) {
                 await openAlert('OnlyOffice Save As payload is incomplete.');
                 return;
             }
-            const saveResult = await bridgeRequest('kinBridgeOnlyOfficeSaveAs', {
-                saveData: {
-                    name: split.name,
-                    dir: split.dir,
-                    url: saveData.url
-                }
+            const saveResult = await withBusy('Saving in Nextcloud...', async function() {
+                return await bridgeRequest('kinBridgeOnlyOfficeSaveAs', {
+                    saveData: {
+                        name: split.name,
+                        dir: split.dir,
+                        url: saveData.url
+                    }
+                });
             });
             if (saveResult && saveResult.ok === false) {
                 throw new Error(saveResult.error || 'OnlyOffice Save As failed');
             }
-            await openNextcloudPath(targetPath);
+            await withBusy('Opening saved file...', async function() {
+                await openNextcloudPath(targetPath);
+            });
         } catch (error) {
             if (error && error.message === 'cancel') return;
             await openAlert(error && error.message ? error.message : String(error));
@@ -739,31 +984,38 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function openTargetWhenReady(status) {
-        if (!status || !status.isLoggedIn || launchedTarget) {
+        if (!status || !status.isLoggedIn || launchedTarget || launchInProgress) {
             return;
         }
+        launchInProgress = true;
 
-        bridgeUser = status.currentUser || bridgeUser;
+        try {
+            bridgeUser = status.currentUser || bridgeUser;
 
-        const currentUrl = status.url || '';
-        if (currentUrl.indexOf('/index.php/apps/onlyoffice/') !== -1) {
-            launchedTarget = true;
-            return;
-        }
-
-        if (kinOpenPath) {
-            try {
-                const opened = await openKinPath(kinOpenPath);
-                if (opened) {
-                    return;
-                }
-            } catch (error) {
-                log('Failed to open kin_open_path:', error && error.message ? error.message : error);
+            const currentUrl = status.url || '';
+            if (currentUrl.indexOf('/index.php/apps/onlyoffice/') !== -1) {
+                launchedTarget = true;
+                return;
             }
-        }
 
-        launchedTarget = true;
-        sendToBridge('kinBridgeNavigate', { path: appConfig.targetPath });
+            if (kinOpenPath && !kinOpenPathAttempted) {
+                kinOpenPathAttempted = true;
+                try {
+                    const opened = await openKinPath(kinOpenPath);
+                    if (opened) {
+                        return;
+                    }
+                } catch (error) {
+                    log('Failed to open kin_open_path:', error && error.message ? error.message : error);
+                    await openAlert('Could not open requested file:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+                }
+            }
+
+            launchedTarget = true;
+            sendToBridge('kinBridgeNavigate', { path: appConfig.targetPath });
+        } finally {
+            launchInProgress = false;
+        }
     }
 
     async function handleBridgeMessage(data) {
@@ -777,7 +1029,8 @@ export function bootstrapOnlyOfficeApp(config) {
             if (
                 data.type === 'kinBridgeWebDAVResponse' ||
                 data.type === 'kinBridgeOnlyOfficeContext' ||
-                data.type === 'kinBridgeOnlyOfficeSaveAsResult'
+                data.type === 'kinBridgeOnlyOfficeSaveAsResult' ||
+                data.type === 'kinBridgeOnlyOfficeForceSaveResult'
             ) {
                 const consumed = settlePendingBridgeRequest(data.requestId, (pending) => {
                     pending.resolve(data);
@@ -795,12 +1048,14 @@ export function bootstrapOnlyOfficeApp(config) {
                     loginInProgress = false;
                     bridgeUser = data.currentUser || bridgeUser;
                     await openTargetWhenReady(data);
-                } else if (!loginInProgress) {
+                } else if (data.isLoginPage && !loginInProgress) {
                     loginInProgress = true;
                     sendToBridge('kinBridgeLogin', {
                         username: 'admin',
                         password: 'admin123'
                     });
+                } else {
+                    log('Bridge reports not logged in outside login page; waiting for page transition', data.url || '');
                 }
                 break;
 
@@ -835,7 +1090,8 @@ export function bootstrapOnlyOfficeApp(config) {
     };
 
     registerMenus();
-    iframeEl.src = NEXTCLOUD_ORIGIN + appConfig.targetPath;
+    var initialPath = kinOpenPath ? '/index.php/apps/dashboard/' : appConfig.targetPath;
+    iframeEl.src = NEXTCLOUD_ORIGIN + initialPath;
 }
 
 function getInstanceId() {

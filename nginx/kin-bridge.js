@@ -33,6 +33,9 @@
         // Try data attribute on head element (Nextcloud stores it here)
         var el = document.querySelector('[data-requesttoken]');
         if (el) return el.getAttribute('data-requesttoken');
+        // Common Nextcloud globals
+        if (window.oc_requesttoken) return window.oc_requesttoken;
+        if (window.OC && window.OC.requestToken) return window.OC.requestToken;
         return null;
     }
 
@@ -71,10 +74,14 @@
 
     function getStatus() {
         var user = getLoggedInUser();
+        var loginPage = isLoginPage();
+        var token = getRequestToken();
+        var sessionHint = !!token && !loginPage;
         return {
-            isLoggedIn: !!user,
+            isLoggedIn: !!user || sessionHint,
             currentUser: user,
-            isLoginPage: isLoginPage(),
+            isLoginPage: loginPage,
+            hasSessionHint: sessionHint,
             url: window.location.href
         };
     }
@@ -87,15 +94,196 @@
             inframe: false,
             url: window.location.href
         };
+        var pathMatch = String(window.location.pathname || '').match(/\/index\.php\/apps\/onlyoffice\/(\d+)/i);
+        if (pathMatch && pathMatch[1]) {
+            context.fileId = pathMatch[1];
+            try {
+                var parsed = new URL(window.location.href);
+                var qpPath = parsed.searchParams.get('filePath');
+                if (qpPath) context.filePath = qpPath;
+                var inframeValue = parsed.searchParams.get('inframe');
+                if (inframeValue === 'true' || inframeValue === '1') {
+                    context.inframe = true;
+                }
+            } catch (_error) {
+                // ignore URL parsing errors
+            }
+        }
         if (!window.OCA || !window.OCA.Onlyoffice) {
             return context;
         }
         var oo = window.OCA.Onlyoffice;
         context.available = true;
-        context.fileId = oo.fileId || null;
-        context.filePath = oo.filePath || null;
+        context.fileId = oo.fileId || context.fileId || null;
+        context.filePath = oo.filePath || context.filePath || null;
         context.inframe = !!oo.inframe;
         return context;
+    }
+
+    function parseJsonSafe(text) {
+        try {
+            return JSON.parse(text);
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    function pickOnlyOfficeConfigData(parsed) {
+        if (!parsed) return null;
+        if (parsed.ocs && parsed.ocs.data) return parsed.ocs.data;
+        if (parsed.data) return parsed.data;
+        return parsed;
+    }
+
+    function parseOnlyOfficeCommandResult(text) {
+        var parsed = parseJsonSafe(text || '');
+        if (!parsed || typeof parsed.error !== 'number') {
+            return { accepted: false, parsed: parsed };
+        }
+        return { accepted: parsed.error === 0, parsed: parsed };
+    }
+
+    function postOnlyOfficeForceSaveCommand(key, token, source, requestId) {
+        var payload = { c: 'forcesave', key: key };
+        if (token) payload.token = token;
+        var body = JSON.stringify(payload);
+
+        function sendTo(endpoint) {
+            var headers = {
+                'Content-Type': 'application/json'
+            };
+            var requestToken = getRequestToken();
+            if (requestToken) {
+                headers.requesttoken = requestToken;
+            }
+            return fetch(endpoint, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: headers,
+                body: body
+            }).then(function(resp) {
+                return resp.text().then(function(text) {
+                    var commandResult = parseOnlyOfficeCommandResult(text || '');
+                    return {
+                        ok: resp.ok && commandResult.accepted,
+                        status: resp.status,
+                        body: text || '',
+                        accepted: commandResult.accepted
+                    };
+                });
+            });
+        }
+
+        var endpoints = [
+            '/coauthoring/CommandService.ashx',
+            '/ds/coauthoring/CommandService.ashx',
+            '/command',
+            '/ds/command'
+        ];
+
+        function attempt(index, lastResult) {
+            if (index >= endpoints.length) {
+                source.postMessage({
+                    type: 'kinBridgeOnlyOfficeForceSaveResult',
+                    requestId: requestId,
+                    ok: false,
+                    status: lastResult ? lastResult.status : 0,
+                    body: lastResult ? lastResult.body : '',
+                    error: 'forcesave command was not accepted'
+                }, '*');
+                return;
+            }
+
+            sendTo(endpoints[index]).then(function(result) {
+                if (result.ok) {
+                    source.postMessage({
+                        type: 'kinBridgeOnlyOfficeForceSaveResult',
+                        requestId: requestId,
+                        ok: true,
+                        status: result.status,
+                        body: result.body
+                    }, '*');
+                    return;
+                }
+                attempt(index + 1, result);
+            }).catch(function(err) {
+                if (index >= endpoints.length - 1) {
+                    source.postMessage({
+                        type: 'kinBridgeOnlyOfficeForceSaveResult',
+                        requestId: requestId,
+                        ok: false,
+                        error: err && err.message ? err.message : 'forcesave failed'
+                    }, '*');
+                    return;
+                }
+                attempt(index + 1, lastResult);
+            });
+        }
+
+        attempt(0, null);
+    }
+
+    function handleOnlyOfficeForceSave(source, requestId) {
+        var ctx = getOnlyOfficeContext();
+        if (!ctx || !ctx.fileId) {
+            source.postMessage({
+                type: 'kinBridgeOnlyOfficeForceSaveResult',
+                requestId: requestId,
+                ok: false,
+                error: 'No active OnlyOffice file context'
+            }, '*');
+            return;
+        }
+
+        var configUrl = '/ocs/v2.php/apps/onlyoffice/api/v1/config/' + encodeURIComponent(String(ctx.fileId));
+        if (ctx.filePath) {
+            configUrl += '?filePath=' + encodeURIComponent(String(ctx.filePath));
+        }
+
+        fetch(configUrl, {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: {
+                'OCS-APIREQUEST': 'true',
+                Accept: 'application/json'
+            }
+        }).then(function(resp) {
+            return resp.text().then(function(text) {
+                return { ok: resp.ok, status: resp.status, text: text || '' };
+            });
+        }).then(function(result) {
+            if (!result.ok) {
+                source.postMessage({
+                    type: 'kinBridgeOnlyOfficeForceSaveResult',
+                    requestId: requestId,
+                    ok: false,
+                    status: result.status,
+                    error: 'Config fetch failed (HTTP ' + result.status + ')'
+                }, '*');
+                return;
+            }
+            var parsed = parseJsonSafe(result.text);
+            var data = pickOnlyOfficeConfigData(parsed);
+            var key = data && data.document && data.document.key ? String(data.document.key) : '';
+            var token = data && data.token ? String(data.token) : '';
+            if (!key) {
+                source.postMessage({
+                    type: 'kinBridgeOnlyOfficeForceSaveResult',
+                    requestId: requestId,
+                    ok: false,
+                    error: 'No OnlyOffice document key available for forcesave'
+                }, '*');
+                return;
+            }
+            postOnlyOfficeForceSaveCommand(key, token, source, requestId);
+        }).catch(function(err) {
+            source.postMessage({
+                type: 'kinBridgeOnlyOfficeForceSaveResult',
+                requestId: requestId,
+                ok: false,
+                error: err && err.message ? err.message : 'forcesave setup failed'
+            }, '*');
+        });
     }
 
     // --- Login attempt tracking (survives page reloads) ---
@@ -250,9 +438,18 @@
             });
         }
 
+        var token = getRequestToken();
+        if (token && !headers.requesttoken && !headers.RequestToken) {
+            headers.requesttoken = token;
+        }
+        if (!headers['X-Requested-With']) {
+            headers['X-Requested-With'] = 'XMLHttpRequest';
+        }
+
         fetch(url, {
             method: method || 'PROPFIND',
             credentials: 'same-origin',
+            cache: 'no-store',
             headers: headers,
             body: body || null
         }).then(function(resp) {
@@ -447,6 +644,10 @@
                         error: 'OnlyOffice context unavailable'
                     }, '*');
                 }
+                break;
+
+            case 'kinBridgeOnlyOfficeForceSave':
+                handleOnlyOfficeForceSave(event.source, data.requestId);
                 break;
         }
     });
