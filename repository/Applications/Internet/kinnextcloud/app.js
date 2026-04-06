@@ -1,156 +1,90 @@
 /**
  * kinnextcloud - Nextcloud integration app for Kin OS
- * Uses iframe with kin-bridge.js for session-based login
+ * Registers a Dormant drive with Workspace via postMessage.
+ * Passes WebDAV URL and credentials so Workspace can fetch directly.
  */
 
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-const DEFAULT_NEXTCLOUD_HOST = window.location.hostname;
+(function(global) {
+    'use strict';
 
-function isLoopbackHost(host) {
-    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
-}
+    var WEBDAV_BASE = 'https://katana-arphicia:5002/remote.php/webdav/';
+    var WEBDAV_USER = 'admin';
+    var WEBDAV_PASS = 'admin123';
 
-function resolveNextcloudHost() {
-    const params = new URLSearchParams(window.location.search);
-    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
-    if (override) {
-        return override;
+    // --- Register dormant drive with WebDAV info ---
+
+    function reportDriveToWorkspace() {
+        window.parent.postMessage({
+            kinDormantRequest: true,
+            operation: 'register',
+            path: 'Nextcloud:',
+            data: {
+                name: 'Nextcloud:',
+                appId: 'kinnextcloud',
+                writable: true,
+                persistent: false,
+                automount: true,
+                // WebDAV endpoint info - Workspace will call this directly
+                webdav: {
+                    baseUrl: WEBDAV_BASE,
+                    authHeader: 'Basic ' + btoa(WEBDAV_USER + ':' + WEBDAV_PASS)
+                }
+            },
+            requestId: 'register-' + Date.now()
+        }, '*');
     }
 
-    try {
-        localStorage.removeItem('kin.nextcloud.host');
-    } catch (error) {
-        // ignore storage failures
+    // --- Kin workspace integration ---
+
+    function getInstanceId() {
+        try {
+            var u = new URL(window.location.href);
+            return u.searchParams.get('kin_app_instance') || '';
+        } catch (e) {
+            return '';
+        }
     }
 
-    if (!isLoopbackHost(window.location.hostname)) {
-        return window.location.hostname;
+    var INSTANCE_ID = getInstanceId();
+    var ORIGIN = window.location.origin;
+
+    function postToParent(msg) {
+        try {
+            window.parent.postMessage(msg, ORIGIN);
+        } catch (e) { /* ignore */ }
     }
 
-    return DEFAULT_NEXTCLOUD_HOST;
-}
-
-const NEXTCLOUD_ORIGIN = `https://${resolveNextcloudHost()}:5002`;
-const ORIGIN = window.location.origin;
-
-const iframeEl = document.getElementById('iframe');
-
-let bridgeReady = false;
-let currentUser = null;
-let loginInProgress = false;
-
-// --- Kin workspace integration ---
-
-function getInstanceId() {
-    try {
-        const u = new URL(window.location.href);
-        return u.searchParams.get('kin_app_instance') || '';
-    } catch (e) {
-        return '';
+    function registerMenus() {
+        if (!INSTANCE_ID) return;
+        postToParent({
+            kinAppRegisterMenus: true,
+            instanceId: INSTANCE_ID,
+            menus: {
+                File: [
+                    { name: 'Log out', command: 'nextcloud.logout' }
+                ]
+            }
+        });
     }
-}
 
-const INSTANCE_ID = getInstanceId();
+    function handleMenuCommand(cmd) {
+        if (cmd === 'nextcloud.logout') {
+            console.log('[kinnextcloud] Logout requested');
+        }
+    }
 
-function postToParent(msg) {
-    try {
-        window.parent.postMessage(msg, ORIGIN);
-    } catch (e) { /* ignore */ }
-}
-
-function registerMenus() {
-    if (!INSTANCE_ID) return;
-    postToParent({
-        kinAppRegisterMenus: true,
-        instanceId: INSTANCE_ID,
-        menus: {
-            File: [
-                { name: 'Log out', command: 'nextcloud.logout' }
-            ]
+    window.addEventListener('message', function(event) {
+        var data = event.data;
+        if (!data) return;
+        if (data.kinMenuCommand === true) {
+            handleMenuCommand(data.command);
         }
     });
-}
 
-function handleMenuCommand(cmd) {
-    if (cmd === 'nextcloud.logout') {
-        sendToBridge('kinBridgeLogout');
-    }
-}
+    // --- Init ---
 
-// --- Bridge communication ---
+    reportDriveToWorkspace();
+    registerMenus();
+    console.log('[kinnextcloud] App loaded - registered Nextcloud: with WebDAV endpoint');
 
-function sendToBridge(type, payload = {}) {
-    try {
-        iframeEl.contentWindow.postMessage({ type, ...payload }, '*');
-    } catch (err) {
-        console.error('[kinnextcloud] Failed to send to bridge:', err);
-    }
-}
-
-function handleBridgeMessage(data) {
-    switch (data.type) {
-        case 'kinBridgeReady':
-            bridgeReady = true;
-            currentUser = data.currentUser;
-            if (data.isLoggedIn) {
-                console.log('[kinnextcloud] Logged in as', currentUser);
-            } else {
-                loginInProgress = true;
-                console.log('[kinnextcloud] Logging in...');
-            }
-            break;
-
-        case 'kinBridgeHandshakeResponse':
-            currentUser = data.currentUser;
-            if (data.isLoggedIn) {
-                loginInProgress = false;
-                console.log('[kinnextcloud] Logged in as', currentUser);
-            } else if (!loginInProgress) {
-                loginInProgress = true;
-                sendToBridge('kinBridgeLogin', {
-                    username: 'admin',
-                    password: 'admin123'
-                });
-            }
-            break;
-
-        case 'kinBridgeStatus':
-        case 'kinBridgeStatusChange':
-            currentUser = data.currentUser;
-            loginInProgress = false;
-            break;
-
-        case 'kinBridgeError':
-            loginInProgress = false;
-            console.error('[kinnextcloud] Bridge error:', data.error, 'action:', data.action);
-            break;
-    }
-}
-
-// --- Event listeners ---
-
-window.addEventListener('message', (e) => {
-    const data = e.data;
-    if (!data) return;
-
-    // Kin workspace menu commands
-    if (data.kinMenuCommand === true) {
-        handleMenuCommand(data.command);
-        return;
-    }
-
-    // Bridge messages from iframe
-    if (data.type && data.type.startsWith('kinBridge')) {
-        handleBridgeMessage(data);
-    }
-});
-
-iframeEl.onload = () => {
-    console.log('[kinnextcloud] iframe loaded');
-};
-
-// --- Init ---
-
-registerMenus();
-iframeEl.src = NEXTCLOUD_ORIGIN;
-console.log('[kinnextcloud] App loaded');
+})(typeof window !== 'undefined' ? window : global);

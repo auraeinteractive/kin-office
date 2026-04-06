@@ -26,6 +26,9 @@
 
     // --- Login state detection ---
 
+    // --- Login credentials (auto-login with admin) ---
+    var BRIDGE_LOGIN = { username: 'admin', password: 'admin123' };
+
     function getRequestToken() {
         // Try hidden input first
         var input = document.querySelector('input[name="requesttoken"]');
@@ -426,12 +429,19 @@
     }
 
     function handleWebDAV(method, path, body, extraHeaders, responseType, source, requestId) {
-        var user = getLoggedInUser() || 'admin';
+        var user = getLoggedInUser() || (BRIDGE_LOGIN && BRIDGE_LOGIN.username) || 'admin';
         var url = path || '/remote.php/dav/files/' + user;
         var headers = {
             'Content-Type': 'application/xml',
             'Depth': '1'
         };
+
+        // Add Basic auth if we have login credentials
+        if (BRIDGE_LOGIN && BRIDGE_LOGIN.username && BRIDGE_LOGIN.password) {
+            var credentials = btoa(BRIDGE_LOGIN.username + ':' + BRIDGE_LOGIN.password);
+            headers['Authorization'] = 'Basic ' + credentials;
+        }
+
         if (extraHeaders && typeof extraHeaders === 'object') {
             Object.keys(extraHeaders).forEach(function(key) {
                 headers[key] = extraHeaders[key];
@@ -448,7 +458,7 @@
 
         fetch(url, {
             method: method || 'PROPFIND',
-            credentials: 'same-origin',
+            credentials: 'include',
             cache: 'no-store',
             headers: headers,
             body: body || null
