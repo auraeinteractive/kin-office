@@ -1,40 +1,21 @@
 /**
- * kinnextcloud - Nextcloud integration app for Kin OS
- * Registers a Dormant drive with Workspace via postMessage.
- * Passes WebDAV URL and credentials so Workspace can fetch directly.
+ * kinnextcloud - Nextcloud web UI launcher for Kin.
+ * Opens Nextcloud in an iframe and auto-logins via kin-bridge.js.
  */
 
 (function(global) {
     'use strict';
 
-    var WEBDAV_BASE = 'https://katana-arphicia:5002/remote.php/webdav/';
-    var WEBDAV_USER = 'admin';
-    var WEBDAV_PASS = 'admin123';
+    var LOOPBACK_HOSTS = { 'localhost': true, '127.0.0.1': true, '::1': true };
+    var NEXTCLOUD_PORT = 5002;
+    var NEXTCLOUD_DASHBOARD_PATH = '/index.php/apps/dashboard/';
 
-    // --- Register dormant drive with WebDAV info ---
+    var LOGIN_USER = 'admin';
+    var LOGIN_PASS = 'admin123';
 
-    function reportDriveToWorkspace() {
-        window.parent.postMessage({
-            kinDormantRequest: true,
-            operation: 'register',
-            path: 'Nextcloud:',
-            data: {
-                name: 'Nextcloud:',
-                appId: 'kinnextcloud',
-                writable: true,
-                persistent: false,
-                automount: true,
-                // WebDAV endpoint info - Workspace will call this directly
-                webdav: {
-                    baseUrl: WEBDAV_BASE,
-                    authHeader: 'Basic ' + btoa(WEBDAV_USER + ':' + WEBDAV_PASS)
-                }
-            },
-            requestId: 'register-' + Date.now()
-        }, '*');
-    }
-
-    // --- Kin workspace integration ---
+    var INSTANCE_ID = '';
+    var iframeEl = null;
+    var loginInProgress = false;
 
     function getInstanceId() {
         try {
@@ -45,18 +26,52 @@
         }
     }
 
-    var INSTANCE_ID = getInstanceId();
-    var ORIGIN = window.location.origin;
+    function setLoading(text) {
+        var el = document.getElementById('loading');
+        if (!el) return;
+        if (text) {
+            el.textContent = String(text);
+            el.classList.remove('hidden');
+        } else {
+            el.classList.add('hidden');
+        }
+    }
 
-    function postToParent(msg) {
+    function postToWorkspace(msg) {
         try {
-            window.parent.postMessage(msg, ORIGIN);
-        } catch (e) { /* ignore */ }
+            window.parent.postMessage(msg, window.location.origin);
+        } catch (e) {
+            /* ignore */
+        }
+    }
+
+    function isLoopbackHost(host) {
+        var value = String(host || '').toLowerCase();
+        return !!LOOPBACK_HOSTS[value];
+    }
+
+    function resolveNextcloudHost(params) {
+        var override = params.get('nextcloud_host') || params.get('nextcloudHost');
+        if (override) return override;
+        if (!isLoopbackHost(window.location.hostname)) return window.location.hostname;
+        return window.location.hostname;
+    }
+
+    function sendToBridge(type, payload) {
+        try {
+            if (!iframeEl || !iframeEl.contentWindow) {
+                throw new Error('Bridge iframe is not ready');
+            }
+            iframeEl.contentWindow.postMessage(Object.assign({ type: type }, payload || {}), '*');
+            return true;
+        } catch (_e) {
+            return false;
+        }
     }
 
     function registerMenus() {
         if (!INSTANCE_ID) return;
-        postToParent({
+        postToWorkspace({
             kinAppRegisterMenus: true,
             instanceId: INSTANCE_ID,
             menus: {
@@ -69,22 +84,74 @@
 
     function handleMenuCommand(cmd) {
         if (cmd === 'nextcloud.logout') {
-            console.log('[kinnextcloud] Logout requested');
+            setLoading('Logging out…');
+            sendToBridge('kinBridgeLogout');
         }
     }
 
-    window.addEventListener('message', function(event) {
-        var data = event.data;
+    function handleBridgeStatus(data) {
         if (!data) return;
-        if (data.kinMenuCommand === true) {
-            handleMenuCommand(data.command);
+
+        if (data.isLoggedIn) {
+            loginInProgress = false;
+            setLoading(null);
+            return;
+        }
+
+        if (data.isLoginPage && !loginInProgress) {
+            loginInProgress = true;
+            setLoading('Signing in…');
+            sendToBridge('kinBridgeLogin', { username: LOGIN_USER, password: LOGIN_PASS });
+            return;
+        }
+
+        if (loginInProgress) {
+            setLoading('Signing in…');
+        } else {
+            setLoading('Connecting to Nextcloud…');
+        }
+    }
+
+    function init() {
+        INSTANCE_ID = getInstanceId();
+        iframeEl = document.getElementById('iframe');
+
+        var params = new URLSearchParams(window.location.search);
+        var host = resolveNextcloudHost(params);
+        var nextcloudOrigin = 'https://' + host + ':' + String(NEXTCLOUD_PORT);
+        var initialPath = NEXTCLOUD_DASHBOARD_PATH;
+
+        if (iframeEl) {
+            iframeEl.onload = function() {
+                sendToBridge('kinBridgeHandshake');
+                sendToBridge('kinBridgeGetStatus');
+            };
+            iframeEl.src = nextcloudOrigin + initialPath;
+        }
+
+        registerMenus();
+        setLoading('Connecting to Nextcloud…');
+    }
+
+    window.addEventListener('message', function(event) {
+        var d = event.data || {};
+
+        if (d.kinMenuCommand === true) {
+            handleMenuCommand(d.command);
+            return;
+        }
+
+        if (d.type && String(d.type).indexOf('kinBridge') === 0) {
+            if (
+                d.type === 'kinBridgeReady' ||
+                d.type === 'kinBridgeHandshakeResponse' ||
+                d.type === 'kinBridgeStatus' ||
+                d.type === 'kinBridgeStatusChange'
+            ) {
+                handleBridgeStatus(d);
+            }
         }
     });
 
-    // --- Init ---
-
-    reportDriveToWorkspace();
-    registerMenus();
-    console.log('[kinnextcloud] App loaded - registered Nextcloud: with WebDAV endpoint');
-
+    init();
 })(typeof window !== 'undefined' ? window : global);

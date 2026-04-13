@@ -1,0 +1,9 @@
+{
+  "id": "kinnextcloud_mail",
+  "displayName": "Nextcloud Mail",
+  "version": "1",
+  "entry": "index.html",
+  "category": "Office",
+  "published": true
+}
+

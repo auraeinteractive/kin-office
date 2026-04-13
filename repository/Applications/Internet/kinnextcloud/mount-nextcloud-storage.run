@@ -1,6 +1,0 @@
-; Auto-mount Nextcloud dormant drive on login
-; Run this script to ensure Nextcloud: drive is available
-
-if NOT ("Nextcloud:" IN "$(mountlist)") then
-    execute /repository/Internet/kinnextcloud/app.js --register-drive
-endif

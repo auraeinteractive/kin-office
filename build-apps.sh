@@ -42,10 +42,14 @@ install_to_kin() {
         return
     fi
     
+    # Try repository first (legacy), then applications (current build)
     KIN_REPO_DIR="$KIN_BUILD_PATH/repository"
+    if [ ! -d "$KIN_REPO_DIR" ]; then
+        KIN_REPO_DIR="$KIN_BUILD_PATH/applications"
+    fi
     
     if [ ! -d "$KIN_REPO_DIR" ]; then
-        echo "Error: Kin repository directory not found at $KIN_REPO_DIR"
+        echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/repository or applications"
         return
     fi
     
