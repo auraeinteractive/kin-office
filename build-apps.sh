@@ -1,6 +1,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$SCRIPT_DIR/repository"
-BUILD_DIR="$SCRIPT_DIR/build/repository"
+SOURCE_DIR="$SCRIPT_DIR/repository/Applications"
+BUILD_DIR="$SCRIPT_DIR/build/repository/Applications"
 CONFIG_FILE="$SCRIPT_DIR/.config.ini"
 
 KIN_BUILD_PATH=""
@@ -43,21 +43,26 @@ install_to_kin() {
         return
     fi
     
-    # Try applications first (current build), then repository (legacy)
-    KIN_REPO_DIR="$KIN_BUILD_PATH/applications"
+    # Try repository first (legacy/actual build location), then applications
+    KIN_REPO_DIR="$KIN_BUILD_PATH/repository/Applications"
     if [ ! -d "$KIN_REPO_DIR" ]; then
-        KIN_REPO_DIR="$KIN_BUILD_PATH/repository"
+        KIN_REPO_DIR="$KIN_BUILD_PATH/applications"
     fi
     
     if [ ! -d "$KIN_REPO_DIR" ]; then
-        echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/applications or repository"
+        echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/repository/Applications or applications"
         return
     fi
     
     echo "Source: $SOURCE_DIR"
     echo "Destination: $KIN_REPO_DIR"
-    echo "Copying files..."
-    rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/" | head -30
+    echo "Files in source:"
+    ls -laR "$SOURCE_DIR/"
+    echo "Checking destination:"
+    ls -la "$KIN_REPO_DIR/Internet/"
+    ls -la "$KIN_REPO_DIR/Office/"
+    echo "Copying files with verbose rsync..."
+    rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/"
     echo "Apps installed to Kin build."
 }
 
@@ -83,7 +88,7 @@ if [ -d "$SOURCE_DIR" ]; then
     echo "Source: $SOURCE_DIR"
     echo "Destination: $BUILD_DIR"
     echo "Copying files..."
-    rsync -av "$SOURCE_DIR/" "$BUILD_DIR/" | head -30
+    rsync -av "$SOURCE_DIR/" "$BUILD_DIR/"
     echo "Done. Apps built to $BUILD_DIR"
 else
     echo "Error: No repository directory found at $SOURCE_DIR"
