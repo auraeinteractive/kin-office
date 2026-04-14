@@ -1050,10 +1050,7 @@ export function bootstrapOnlyOfficeApp(config) {
                     await openTargetWhenReady(data);
                 } else if (data.isLoginPage && !loginInProgress) {
                     loginInProgress = true;
-                    sendToBridge('kinBridgeLogin', {
-                        username: 'admin',
-                        password: 'admin123'
-                    });
+                    sendToBridge('kinBridgeLogin');
                 } else {
                     log('Bridge reports not logged in outside login page; waiting for page transition', data.url || '');
                 }

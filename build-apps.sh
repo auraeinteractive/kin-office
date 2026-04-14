@@ -7,13 +7,14 @@ KIN_BUILD_PATH=""
 
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
-        KIN_BUILD_PATH=$(grep "^KIN_BUILD_PATH=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2-)
+        KIN_BUILD_PATH=$(grep "^KIN_BUILD_PATH=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d'=' -f2-)
     fi
 }
 
 save_config() {
     if [ -n "$KIN_BUILD_PATH" ]; then
         echo "KIN_BUILD_PATH=$KIN_BUILD_PATH" > "$CONFIG_FILE"
+        echo "Saved Kin build path to config: $KIN_BUILD_PATH"
     fi
 }
 
@@ -42,23 +43,29 @@ install_to_kin() {
         return
     fi
     
-    # Try repository first (legacy), then applications (current build)
-    KIN_REPO_DIR="$KIN_BUILD_PATH/repository"
+    # Try applications first (current build), then repository (legacy)
+    KIN_REPO_DIR="$KIN_BUILD_PATH/applications"
     if [ ! -d "$KIN_REPO_DIR" ]; then
-        KIN_REPO_DIR="$KIN_BUILD_PATH/applications"
+        KIN_REPO_DIR="$KIN_BUILD_PATH/repository"
     fi
     
     if [ ! -d "$KIN_REPO_DIR" ]; then
-        echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/repository or applications"
+        echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/applications or repository"
         return
     fi
     
-    echo "Installing apps to $KIN_REPO_DIR..."
-    rsync -a "$SOURCE_DIR/" "$KIN_REPO_DIR/"
+    echo "Source: $SOURCE_DIR"
+    echo "Destination: $KIN_REPO_DIR"
+    echo "Copying files..."
+    rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/" | head -30
     echo "Apps installed to Kin build."
 }
 
 load_config
+
+echo ""
+echo "=== Kin Nextcloud Apps Build Script ==="
+echo ""
 
 if [ -z "$KIN_BUILD_PATH" ]; then
     if prompt_kin_path; then
@@ -68,19 +75,29 @@ else
     echo "Using Kin build path from config: $KIN_BUILD_PATH"
 fi
 
-echo "Building Kin Nextcloud apps..."
+echo ""
+echo "=== Building local copy ==="
 mkdir -p "$BUILD_DIR"
 
 if [ -d "$SOURCE_DIR" ]; then
-    rsync -a "$SOURCE_DIR/" "$BUILD_DIR/"
+    echo "Source: $SOURCE_DIR"
+    echo "Destination: $BUILD_DIR"
+    echo "Copying files..."
+    rsync -av "$SOURCE_DIR/" "$BUILD_DIR/" | head -30
     echo "Done. Apps built to $BUILD_DIR"
 else
-    echo "No repository directory found at $SOURCE_DIR"
+    echo "Error: No repository directory found at $SOURCE_DIR"
     exit 1
 fi
 
-if [ -n "$KIN_BUILD_PATH" ] && [ -d "$KIN_BUILD_PATH" ]; then
+echo ""
+echo "=== Installing to Kin build ==="
+
+if [ -n "$KIN_BUILD_PATH" ]; then
     install_to_kin
+else
+    echo "KIN_BUILD_PATH not set, skipping Kin install"
 fi
 
-echo "Build complete."
+echo ""
+echo "=== Build complete ==="
