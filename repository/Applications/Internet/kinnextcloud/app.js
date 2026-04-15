@@ -10,9 +10,6 @@
     var NEXTCLOUD_PORT = 5002;
     var NEXTCLOUD_DASHBOARD_PATH = '/index.php/apps/dashboard/';
 
-    var LOGIN_USER = 'admin';
-    var LOGIN_PASS = 'admin123';
-
     var INSTANCE_ID = '';
     var iframeEl = null;
     var loginInProgress = false;
@@ -101,7 +98,7 @@
         if (data.isLoginPage && !loginInProgress) {
             loginInProgress = true;
             setLoading('Signing in…');
-            sendToBridge('kinBridgeLogin', { username: LOGIN_USER, password: LOGIN_PASS });
+            sendToBridge('kinBridgeLogin');
             return;
         }
 

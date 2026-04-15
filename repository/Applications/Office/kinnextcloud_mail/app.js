@@ -109,7 +109,7 @@ export function bootstrapNextcloudMail() {
         if (data.isLoginPage && !loginInProgress) {
             loginInProgress = true;
             setLoading('Signing in…');
-            sendToBridge('kinBridgeLogin', { username: 'admin', password: 'admin123' });
+            sendToBridge('kinBridgeLogin');
             return;
         }
 

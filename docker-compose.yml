@@ -11,9 +11,29 @@ services:
       - NEXTCLOUD_ADMIN_USER=admin
       - NEXTCLOUD_ADMIN_PASSWORD=admin123
       - NEXTCLOUD_TRUSTED_DOMAINS=*
+      - SQLITE_DATABASE=nextcloud
     volumes:
       - ./nextcloud/data:/var/www/html/data
       - ./nextcloud/config:/var/www/html/config
+    networks:
+      - nextcloud_network
+
+  nextcloud_oidc_init:
+    image: nextcloud:latest
+    container_name: nextcloud_oidc_init
+    restart: "no"
+    depends_on:
+      - nextcloud
+    entrypoint: ["/bin/bash", "/oidc-init.sh"]
+    environment:
+      - KIN_OIDC_PROVIDER_ID=${KIN_OIDC_PROVIDER_ID:-kin}
+      - KIN_OIDC_CLIENT_ID=${KIN_OIDC_CLIENT_ID:-kin-nextcloud}
+      - KIN_OIDC_CLIENT_SECRET=${KIN_OIDC_CLIENT_SECRET:-kin-nextcloud-secret}
+      - KIN_OIDC_DISCOVERY_URI=${KIN_OIDC_DISCOVERY_URI:-https://localhost:9219/.well-known/openid-configuration}
+    volumes:
+      - ./nextcloud/config:/var/www/html/config
+      - ./nextcloud/data:/var/www/html/data
+      - ./nextcloud/oidc-init.sh:/oidc-init.sh:ro
     networks:
       - nextcloud_network
 

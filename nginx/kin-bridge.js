@@ -7,9 +7,6 @@
     'use strict';
 
     var BRIDGE_VERSION = '2.0';
-    var MAX_LOGIN_ATTEMPTS = 2;
-    var LOGIN_STORAGE_KEY = 'kinBridgeLoginAttempts';
-    var LOGIN_SUCCESS_KEY = 'kinBridgeLoginSuccess';
 
     // --- Helpers ---
 
@@ -25,9 +22,6 @@
     }
 
     // --- Login state detection ---
-
-    // --- Login credentials (auto-login with admin) ---
-    var BRIDGE_LOGIN = { username: 'admin', password: 'admin123' };
 
     function getRequestToken() {
         // Try hidden input first
@@ -289,7 +283,7 @@
         });
     }
 
-    // --- Toolbar hiding (Always apply, for OnlyOffice context) ---
+// --- Toolbar hiding (Always apply, for OnlyOffice context) ---
 
     function hideNextcloudToolbar() {
         var style = document.createElement('style');
@@ -357,116 +351,21 @@
         }, true);
     }
 
-    function getLoginAttempts() {
+    // --- Login via OIDC (silent) ---
+
+    function startOidcLogin() {
         try {
-            return parseInt(sessionStorage.getItem(LOGIN_STORAGE_KEY) || '0', 10);
-        } catch (e) {
-            return 0;
-        }
-    }
-
-    function setLoginAttempts(n) {
-        try {
-            sessionStorage.setItem(LOGIN_STORAGE_KEY, String(n));
-        } catch (e) {}
-    }
-
-    function clearLoginAttempts() {
-        try {
-            sessionStorage.removeItem(LOGIN_STORAGE_KEY);
-        } catch (e) {}
-    }
-
-    function markLoginSuccess() {
-        try {
-            sessionStorage.setItem(LOGIN_SUCCESS_KEY, 'true');
-        } catch (e) {}
-    }
-
-    // --- Login via fetch (POST) ---
-
-    function doLogin(username, password) {
-        var attempts = getLoginAttempts();
-        if (attempts >= MAX_LOGIN_ATTEMPTS) {
-            log('Max login attempts reached (' + attempts + '), stopping.');
-            postToParent({
-                type: 'kinBridgeError',
-                error: 'Max login attempts exceeded',
-                action: 'login'
-            });
-            return;
-        }
-
-        setLoginAttempts(attempts + 1);
-        log('Login attempt', attempts + 1, 'for user:', username);
-
-        var token = getRequestToken();
-        log('Request token:', token ? '(found)' : '(none)');
-
-        // Build form data - Nextcloud uses the same form fields as OwnCloud
-        var formData = new FormData();
-        formData.append('user', username || 'admin');
-        formData.append('password', password || 'admin123');
-        if (token) {
-            formData.append('requesttoken', token);
-        }
-        formData.append('timezone-offset', String(new Date().getTimezoneOffset() / -60));
-        formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-
-        fetch('/index.php/login', {
-            method: 'POST',
-            body: formData,
-            credentials: 'same-origin',
-            redirect: 'manual',
-            headers: {
-                'Accept': 'text/html,application/xhtml+xml',
-                'requesttoken': token || ''
-            }
-        }).then(function(resp) {
-            log('Login response status:', resp.status, 'type:', resp.type);
-            // Nextcloud returns 303 on successful login
-            // With redirect: 'manual', we get an opaque-redirect (type=opaqueredirect) or 303
-            if (resp.type === 'opaqueredirect' || resp.status === 303 || resp.status === 302 || resp.status === 0) {
-                log('Login succeeded (redirect detected)');
-                clearLoginAttempts();
-                markLoginSuccess();
-                window.location.href = '/index.php/apps/dashboard/';
+            var u = new URL(window.location.href);
+            // Allow admins to force the local login form.
+            if (u.searchParams.get('direct') === '1') {
+                log('Login direct=1 requested; not starting OIDC');
                 return;
             }
-            if (resp.ok) {
-                // 200 OK could mean login page re-rendered (wrong credentials)
-                return resp.text().then(function(body) {
-                    if (body.indexOf('apps/dashboard') !== -1 || body.indexOf('apps/files') !== -1 || body.indexOf('data-user') !== -1) {
-                        // Actually logged in
-                        clearLoginAttempts();
-                        markLoginSuccess();
-                        window.location.href = '/index.php/apps/dashboard/';
-                    } else {
-                        var errorMatch = body.match(/class="warning"[^>]*>([^<]+)/);
-                        var errorMsg = errorMatch ? errorMatch[1].trim() : 'Login failed - check credentials';
-                        log('Login error:', errorMsg);
-                        postToParent({
-                            type: 'kinBridgeError',
-                            error: errorMsg,
-                            action: 'login'
-                        });
-                    }
-                });
-            }
-            log('Login failed with status:', resp.status);
-            postToParent({
-                type: 'kinBridgeError',
-                error: 'Login failed (HTTP ' + resp.status + ')',
-                action: 'login'
-            });
-        }).catch(function(err) {
-            log('Login fetch error:', err.message);
-            postToParent({
-                type: 'kinBridgeError',
-                error: err.message,
-                action: 'login'
-            });
-        });
+        } catch (_e) {}
+
+        // If user_oidc is configured with allow_multiple_user_backends=0, /login auto-redirects to the IdP.
+        // This keeps the user out of the Nextcloud login form entirely.
+        window.location.href = '/index.php/login';
     }
 
     // --- Logout ---
@@ -477,7 +376,6 @@
         if (token) {
             logoutUrl += '?requesttoken=' + encodeURIComponent(token);
         }
-        clearLoginAttempts();
         window.location.href = logoutUrl;
     }
 
@@ -495,18 +393,12 @@
     }
 
     function handleWebDAV(method, path, body, extraHeaders, responseType, source, requestId) {
-        var user = getLoggedInUser() || (BRIDGE_LOGIN && BRIDGE_LOGIN.username) || 'admin';
+        var user = getLoggedInUser() || 'unknown';
         var url = path || '/remote.php/dav/files/' + user;
         var headers = {
             'Content-Type': 'application/xml',
             'Depth': '1'
         };
-
-        // Add Basic auth if we have login credentials
-        if (BRIDGE_LOGIN && BRIDGE_LOGIN.username && BRIDGE_LOGIN.password) {
-            var credentials = btoa(BRIDGE_LOGIN.username + ':' + BRIDGE_LOGIN.password);
-            headers['Authorization'] = 'Basic ' + credentials;
-        }
 
         if (extraHeaders && typeof extraHeaders === 'object') {
             Object.keys(extraHeaders).forEach(function(key) {
@@ -640,11 +532,8 @@
                 break;
 
             case 'kinBridgeLogin':
-                if (status.isLoginPage) {
-                    doLogin(data.username, data.password);
-                } else if (!status.isLoggedIn) {
-                    // Not on login page and not logged in, navigate to login
-                    window.location.href = '/index.php/login';
+                if (!status.isLoggedIn) {
+                    startOidcLogin();
                 }
                 break;
 
@@ -735,15 +624,14 @@
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
 
-        // Hide toolbar for OnlyOffice iframe
+// Hide toolbar for OnlyOffice iframe
         ensureToolbarHidden();
 
         // Intercept new window requests
         interceptNewWindowAttempts();
 
-        // If logged in, clear any stored attempts and notify parent
+        // If logged in, notify parent
         if (status.isLoggedIn) {
-            clearLoginAttempts();
             postToParent({
                 type: 'kinBridgeReady',
                 isNextcloud: true,
@@ -763,23 +651,11 @@
             url: status.url
         });
 
-        // Auto-login if on the login page
+        // If Nextcloud shows a login form, start OIDC immediately.
         if (status.isLoginPage) {
-            var attempts = getLoginAttempts();
-            if (attempts < MAX_LOGIN_ATTEMPTS) {
-                log('Auto-login attempt', attempts + 1);
-                // Small delay to ensure the page is fully rendered and token is available
-                setTimeout(function() {
-                    doLogin('admin', 'admin123');
-                }, 500);
-            } else {
-                log('Skipping auto-login, max attempts reached');
-                postToParent({
-                    type: 'kinBridgeError',
-                    error: 'Auto-login failed after ' + MAX_LOGIN_ATTEMPTS + ' attempts',
-                    action: 'login'
-                });
-            }
+            setTimeout(function() {
+                startOidcLogin();
+            }, 250);
         }
     }
 
