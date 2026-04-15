@@ -75,9 +75,17 @@ docker compose up -d --build
 
 ## Configuration
 
-Nextcloud credentials (set in `docker-compose.yml`):
-- Username: `admin`
-- Password: `admin123`
+Nextcloud credentials (set via environment / `.env` for `docker-compose.yml`):
+- `NEXTCLOUD_ADMIN_USER`
+- `NEXTCLOUD_ADMIN_PASSWORD`
+
+OIDC provider discovery (dev/LAN):
+- Run Kin IdP on a LAN-reachable issuer (avoid `localhost`): `KIN_OIDC_ISSUER="https://<lan-host-or-ip>:9219" ../kin/deploy.sh`
+- Nextcloud may block LAN/private outbound URLs unless enabled:
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set allow_local_remote_servers --type boolean --value true
+```
 
 Nextcloud CSRF protection must be disabled for auto-login to work:
 ```bash
