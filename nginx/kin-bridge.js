@@ -289,7 +289,73 @@
         });
     }
 
-    // --- Login attempt tracking (survives page reloads) ---
+    // --- Toolbar hiding (Always apply, for OnlyOffice context) ---
+
+    function hideNextcloudToolbar() {
+        var style = document.createElement('style');
+        style.id = 'kin-bridge-toolbar-hide';
+        style.textContent = 
+            '#header { display: none !important; }' +
+            '#content { margin-top: 0 !important; height: 100% !important; }' +
+            '#content > #app > iframe { height: 100% !important; }' +
+            '.header { display: none !important; }' +
+            '.app-content { margin-top: 0 !important; }' +
+            '#app-content { margin-top: 0 !important; height: 100% !important; }';
+        
+        if (!document.getElementById('kin-bridge-toolbar-hide')) {
+            document.head.appendChild(style);
+        }
+    }
+
+    function ensureToolbarHidden() {
+        hideNextcloudToolbar();
+        // Re-apply on DOM changes (for dynamically loaded content)
+        if (typeof MutationObserver !== 'undefined') {
+            window.__kinBridgeToolbarObserver = new MutationObserver(function() {
+                hideNextcloudToolbar();
+            });
+            window.__kinBridgeToolbarObserver.observe(document.body || document.documentElement, {
+                childList: true,
+                subtree: true
+            });
+        }
+    }
+
+    // --- OnlyOffice check (for other features) ---
+
+    function isOnlyOfficeContext() {
+        var ctx = getOnlyOfficeContext();
+        return ctx && ctx.inframe;
+    }
+
+    // --- New window interception ---
+
+    function interceptNewWindowAttempts() {
+        // Override window.open
+        var originalWindowOpen = window.open;
+        window.open = function(url, name, features) {
+            postToParent({
+                type: 'kinBridgeOpenWindow',
+                url: url || '',
+                target: name || '_blank'
+            });
+            return null;
+        };
+
+        // Intercept anchor clicks that target _blank
+        document.addEventListener('click', function(e) {
+            var anchor = e.target.closest('a[target="_blank"]');
+            if (anchor) {
+                e.preventDefault();
+                e.stopPropagation();
+                postToParent({
+                    type: 'kinBridgeOpenWindow',
+                    url: anchor.href || '',
+                    target: '_blank'
+                });
+            }
+        }, true);
+    }
 
     function getLoginAttempts() {
         try {
@@ -668,6 +734,12 @@
         var status = getStatus();
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
+
+        // Hide toolbar for OnlyOffice iframe
+        ensureToolbarHidden();
+
+        // Intercept new window requests
+        interceptNewWindowAttempts();
 
         // If logged in, clear any stored attempts and notify parent
         if (status.isLoggedIn) {

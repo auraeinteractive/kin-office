@@ -46,7 +46,7 @@ export function bootstrapNextcloudMail() {
     const params = new URLSearchParams(window.location.search);
     const nextcloudHost = resolveNextcloudHost(params);
     const NEXTCLOUD_ORIGIN = 'https://' + nextcloudHost + ':5002';
-    const targetPath = '/index.php/apps/mail/';
+    const targetPath = '/apps/mail/';
 
     let loginInProgress = false;
     let launchedTarget = false;
@@ -87,7 +87,7 @@ export function bootstrapNextcloudMail() {
     function ensureMailLoaded(status) {
         if (launchedTarget) return;
         const url = status && status.url ? String(status.url) : '';
-        if (url.indexOf('/index.php/apps/mail') !== -1) {
+        if (url.indexOf('/apps/mail') !== -1) {
             launchedTarget = true;
             return;
         }

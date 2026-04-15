@@ -119,6 +119,8 @@ export function bootstrapOnlyOfficeApp(config) {
     let bridgeUser = null;
     let currentOnlyOfficePath = null;
     let currentKinPath = null;
+    let autosavePollingInterval = null;
+    let lastAutosaveCheck = 0;
 
     const instanceId = getInstanceId();
 
@@ -341,7 +343,8 @@ export function bootstrapOnlyOfficeApp(config) {
             }
         }
         if (!response.ok) {
-            throw new Error((json && json.message) ? String(json.message) : ('HTTP ' + response.status));
+            log('apiPostJson error:', response.status, 'path=', path, 'response=', text);
+            throw new Error((json && json.message) ? String(json.message) : ('HTTP ' + response.status + ' ' + text.substring(0, 200)));
         }
         return json || {};
     }
@@ -691,26 +694,107 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function writeKinBinaryFile(kinPath, bytes) {
-        const response = await apiPostJson('/api/file/write_binary', {
-            path: String(kinPath || ''),
-            data_base64: bytesToBase64(bytes)
-        });
-        if (!response || response.response !== 'success') {
-            throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
+        log('writeKinBinaryFile: path=', kinPath, 'bytes=', bytes ? bytes.length : 0);
+        const b64 = bytesToBase64(bytes);
+        log('writeKinBinaryFile: base64 length=', b64.length);
+        
+        try {
+            const response = await apiPostJson('/api/file/write_binary', {
+                path: String(kinPath || ''),
+                data_base64: b64
+            });
+            log('writeKinBinaryFile response:', response);
+            if (!response || response.response !== 'success') {
+                throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
+            }
+        } catch (writeError) {
+            log('writeKinBinaryFile FAILED:', writeError && writeError.message ? writeError.message : writeError);
+            
+            // Try alternative: use /api/file/write endpoint
+            log('Trying alternative /api/file/write...');
+            const writeResponse = await apiPostJson('/api/file/write', {
+                path: String(kinPath || ''),
+                data: Array.from(bytes)
+            });
+            log('writeKinBinaryFile alt response:', writeResponse);
+            if (!writeResponse || writeResponse.response !== 'success') {
+                throw new Error((writeResponse && writeResponse.message) ? String(writeResponse.message) : 'Could not write file to Kin path (alt)');
+            }
         }
     }
 
     async function saveNextcloudFileToKinPath(sourceNextcloudPath, targetKinPath) {
-        await flushOnlyOfficeEdits(sourceNextcloudPath);
+        log('saveNextcloudFileToKinPath: source=', sourceNextcloudPath, 'target=', targetKinPath);
+        try {
+            await flushOnlyOfficeEdits(sourceNextcloudPath);
+        } catch (e) {
+            log('flushOnlyOfficeEdits failed:', e && e.message ? e.message : e);
+        }
         const bytes = await readNextcloudFileBytes(sourceNextcloudPath);
+        log('readNextcloudFileBytes got', bytes ? bytes.length : 0, 'bytes');
         await writeKinBinaryFile(targetKinPath, bytes);
+        log('writeKinBinaryFile completed');
         try {
             const verifyBytes = await readKinFileBytes(targetKinPath);
             if (verifyBytes && verifyBytes.length !== bytes.length) {
                 log('Save verification length mismatch', bytes.length, verifyBytes.length, targetKinPath);
+            } else {
+                log('Save verification OK,', verifyBytes ? verifyBytes.length : 0, 'bytes');
             }
         } catch (error) {
             log('Save verification readback failed:', error && error.message ? error.message : error);
+        }
+    }
+
+    const AUTOSAVE_POLL_INTERVAL_MS = 15000;
+
+    async function startAutosavePolling() {
+        if (autosavePollingInterval) return;
+        if (!currentKinPath) return;
+        const context = await getOnlyOfficeContext();
+        if (!context || !context.filePath) return;
+        
+        log('Starting autosave polling for', currentKinPath);
+        let lastSavedSize = 0;
+        
+        autosavePollingInterval = setInterval(async () => {
+            try {
+                log('Autosave poll check...');
+                const ctx = await getOnlyOfficeContext();
+                if (!ctx || !ctx.filePath) {
+                    log('Autosave: no OnlyOffice context');
+                    return;
+                }
+                
+                log('Autosave: currentKinPath=', currentKinPath, 'filePath=', ctx.filePath);
+                if (!currentKinPath) {
+                    log('Autosave: no currentKinPath, skipping');
+                    return;
+                }
+                
+                const bytes = await readNextcloudFileBytes(ctx.filePath);
+                const currentSize = bytes ? bytes.length : 0;
+                
+                log('Autosave: currentSize=', currentSize, 'lastSavedSize=', lastSavedSize);
+                
+                if (currentSize !== lastSavedSize && currentSize > 0) {
+                    log('Autosave detected, syncing to', currentKinPath);
+                    await flushOnlyOfficeEdits(ctx.filePath);
+                    await saveNextcloudFileToKinPath(ctx.filePath, currentKinPath);
+                    lastSavedSize = currentSize;
+                    log('Autosave sync complete');
+                }
+            } catch (error) {
+                log('Autosave poll error:', error && error.message ? error.message : error);
+            }
+        }, AUTOSAVE_POLL_INTERVAL_MS);
+    }
+
+    function stopAutosavePolling() {
+        if (autosavePollingInterval) {
+            clearInterval(autosavePollingInterval);
+            autosavePollingInterval = null;
+            log('Stopped autosave polling');
         }
     }
 
@@ -820,6 +904,39 @@ export function bootstrapOnlyOfficeApp(config) {
         sendToBridge('kinBridgeNavigate', {
             path: '/index.php/apps/onlyoffice/' + fileId + '?filePath=' + encodeURIComponent(nextcloudPath)
         });
+        
+        if (!currentKinPath) {
+            setTimeout(async () => {
+                await promptSaveToKin(nextcloudPath);
+            }, 2000);
+        }
+    }
+    
+    async function promptSaveToKin(nextcloudPath) {
+        const context = await getOnlyOfficeContext();
+        if (!context || !context.filePath) return;
+        if (currentKinPath) return;
+        
+        const fileName = splitNextcloudPath(nextcloudPath).name || 'Untitled';
+        const shouldSave = confirm('Save this document to a Kin path?\n\nFile: ' + fileName + '\n\nChoose OK to save to Kin, or Cancel to keep in Nextcloud only.');
+        if (shouldSave) {
+            const targetKinPath = await requestFileDialog({
+                mode: 'save',
+                initialPath: dialogInitialPath,
+                defaultFilename: fileName
+            });
+            if (targetKinPath) {
+                const targetPath = toNextcloudPath(targetKinPath, nextcloudVolumeLabel);
+                if (!targetPath) {
+                    await withBusy('Saving to Kin path...', async function() {
+                        await saveNextcloudFileToKinPath(nextcloudPath, targetKinPath);
+                    });
+                    currentKinPath = targetKinPath;
+                    startAutosavePolling();
+                    await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
+                }
+            }
+        }
     }
 
     async function openKinPath(kinPath) {
@@ -827,12 +944,14 @@ export function bootstrapOnlyOfficeApp(config) {
         if (nextcloudPath) {
             currentKinPath = kinPath;
             await openNextcloudPath(nextcloudPath);
+            startAutosavePolling();
             return true;
         }
 
         const importedPath = await importKinFileToNextcloud(kinPath);
         currentKinPath = kinPath;
         await openNextcloudPath(importedPath);
+        startAutosavePolling();
         return true;
     }
 
@@ -884,11 +1003,17 @@ export function bootstrapOnlyOfficeApp(config) {
                 const context = await getOnlyOfficeContext();
                 const sourcePath = context && context.filePath ? String(context.filePath) : currentOnlyOfficePath;
                 const currentKinIsExternal = currentKinPath && !toNextcloudPath(currentKinPath, nextcloudVolumeLabel);
+                log('MENU_SAVE_COMMAND: sourcePath=', sourcePath, 'currentKinPath=', currentKinPath, 'currentKinIsExternal=', currentKinIsExternal);
                 if (currentKinIsExternal && sourcePath) {
-                    await withBusy('Saving to Kin path...', async function() {
-                        await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
-                    });
-                    await openAlert('Saved to ' + currentKinPath + '.', 'Saved');
+                    try {
+                        await withBusy('Saving to Kin path...', async function() {
+                            await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
+                        });
+                        await openAlert('Saved to ' + currentKinPath + '.', 'Saved');
+                    } catch (saveError) {
+                        log('Save to Kin failed:', saveError && saveError.message ? saveError.message : saveError);
+                        await openAlert('Save failed: ' + (saveError && saveError.message ? saveError.message : String(saveError)), 'Error');
+                    }
                 } else if (context && context.filePath) {
                     await openAlert('OnlyOffice autosaves this document in Nextcloud.\n\nCurrent file: ' + context.filePath, 'Saved');
                 } else {
@@ -916,6 +1041,7 @@ export function bootstrapOnlyOfficeApp(config) {
                         await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
                     });
                     currentKinPath = targetKinPath;
+                    startAutosavePolling();
                     await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                     return;
                 }
@@ -923,6 +1049,7 @@ export function bootstrapOnlyOfficeApp(config) {
                     await copyNextcloudFile(sourcePath, targetPath);
                 });
                 currentKinPath = targetKinPath;
+                startAutosavePolling();
                 await withBusy('Opening saved file...', async function() {
                     await openNextcloudPath(targetPath);
                 });
@@ -943,6 +1070,7 @@ export function bootstrapOnlyOfficeApp(config) {
                 defaultFilename: defaultName
             });
             const targetPath = toNextcloudPath(targetKinPath, nextcloudVolumeLabel);
+            log('Save As: targetKinPath=', targetKinPath, 'targetPath=', targetPath);
             if (!targetPath) {
                 const context = await getOnlyOfficeContext();
                 const sourcePath = context && context.filePath ? String(context.filePath) : currentOnlyOfficePath;
@@ -950,10 +1078,12 @@ export function bootstrapOnlyOfficeApp(config) {
                     await openAlert('Open a Nextcloud document first, then use Save As.');
                     return;
                 }
+                log('Save As to Kin: sourcePath=', sourcePath, 'targetKinPath=', targetKinPath);
                 await withBusy('Saving to Kin path...', async function() {
                     await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
                 });
                 currentKinPath = targetKinPath;
+                startAutosavePolling();
                 await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                 return;
             }
@@ -1061,6 +1191,10 @@ export function bootstrapOnlyOfficeApp(config) {
 
             case 'kinBridgeOnlyOfficeRequestSaveAs':
                 await handleOnlyOfficeSaveAsRequest(data);
+                break;
+
+            case 'kinBridgeOpenWindow':
+                window.parent.postMessage({ kinOpenWindow: true, url: data.url, target: data.target }, ORIGIN);
                 break;
 
             case 'kinBridgeError':

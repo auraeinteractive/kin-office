@@ -104,6 +104,11 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageU
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value "true"
 ```
 
+## Kin OS
+
+If you need access to the Kin Meta OS itself, it can be found in ../kin/
+Access the kin repository in read only unless otherwise asked by the user.
+
 ## Files
 
 - `docker-compose.yml` - Service definitions
