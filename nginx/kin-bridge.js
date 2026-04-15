@@ -293,6 +293,7 @@
             '#content { margin-top: 0 !important; height: 100% !important; }' +
             '#content > #app > iframe { height: 100% !important; }' +
             '.header { display: none !important; }' +
+            '.header-guest { display: none !important; }' +
             '.app-content { margin-top: 0 !important; }' +
             '#app-content { margin-top: 0 !important; height: 100% !important; }';
         
