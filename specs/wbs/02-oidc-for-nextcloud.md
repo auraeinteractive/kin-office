@@ -10,6 +10,14 @@
 
 Kin apps embed Nextcloud in an iframe and use `postMessage` through `nginx/kin-bridge.js`. **Nextcloud passwords must not** be embedded in Kin apps; login is delegated to **Nextcloud `user_oidc`**, which talks to Kin’s OIDC endpoints.
 
+### Current stack wiring (from this repo)
+
+- **Nextcloud container**: `nextcloud` (`nextcloud:latest`) exposed on host `http://<host>:8081/` (plain HTTP, for debugging only).
+- **Reverse proxy (canonical access)**: `nginx_nextcloud_proxy` terminates TLS and serves Nextcloud at `https://<host>:5002/`.
+- **OnlyOffice**: `onlyoffice` proxied same-origin under `https://<host>:5002/ds/` and also separately at `https://<host>:5003/`.
+- **Bridge injection**: `nginx/conf.d/nextcloud.conf` uses `sub_filter` to inject `<script src="/kin-bridge.js"></script>` into HTML pages.
+- **OIDC discovery default (container → host)**: Compose sets `KIN_OIDC_DISCOVERY_URI` default to `https://host.docker.internal:9219/.well-known/openid-configuration` and adds `extra_hosts: host.docker.internal:host-gateway` so Nextcloud can reach a Kin IdP running on the Docker host.
+
 **Primary integration surfaces (this repo)**
 
 | Area | Path / artifact |
@@ -19,7 +27,7 @@ Kin apps embed Nextcloud in an iframe and use `postMessage` through `nginx/kin-b
 | Nextcloud iframe app | `repository/Applications/Internet/kinnextcloud/app.js` |
 | OnlyOffice launchers | `repository/Applications/Office/kinonlyoffice_common/office_app.js` |
 | Mail launcher | `repository/Applications/Office/kinnextcloud_mail/app.js` |
-| Compose + optional OIDC bootstrap | `docker-compose.yml`, `nextcloud/oidc-init.sh` |
+| Compose + optional OIDC bootstrap | `docker-compose.yml`, documented `occ` runbook |
 
 ---
 
@@ -63,6 +71,27 @@ Implemented and tracked in **`../kin`** (discovery, JWKS, authorize, token, user
 - [x] Claim / UID mapping aligned with Kin usernames (`preferred_username` or agreed claim).
 - [x] `check-bearer` / bearer validation direction per operator policy (validate against installed `user_oidc` docs).
 
+**Concrete configuration (admin UI)**
+
+The `user_oidc` app exposes an admin page under Nextcloud settings (exact menu name varies by Nextcloud/app version; commonly under **Settings → Administration → OpenID Connect**).
+
+Minimum fields to set for the Kin provider:
+
+- **Identifier**: `kin` (or `${KIN_OIDC_PROVIDER_ID}`, keep stable).
+- **Discovery URI**: `${KIN_OIDC_DISCOVERY_URI}` (see Phase D: this must be reachable from inside the `nextcloud` container).
+- **Client ID / secret**: `${KIN_OIDC_CLIENT_ID}` / `${KIN_OIDC_CLIENT_SECRET}`.
+- **Scope**: `openid profile email` (start with `openid profile`; add `email` only if Kin provides it).
+- **User ID claim**: `preferred_username` (or whatever Kin emits as stable username).
+- **Auto provisioning**: enable only if you want Nextcloud accounts created on first login; otherwise pre-create users and map via claim.
+
+**Redirect URI**
+
+Register the Nextcloud redirect URI at the Kin provider (or configure Kin to accept it). With the Nginx proxy, the canonical redirect base is:
+
+- `https://<host>:5002/index.php/apps/user_oidc/code/kin`
+
+The exact path segment after `/code/` is the provider identifier you configured (e.g. `kin`).
+
 #### B.3 Global settings (proxy, TLS, OIDC client hints)
 
 - [x] `trusted_proxies` includes `nginx_nextcloud_proxy` (example in this repo’s docs).
@@ -70,10 +99,44 @@ Implemented and tracked in **`../kin`** (discovery, JWKS, authorize, token, user
 - [x] Self-signed Kin: `user_oidc.httpclient.allowselfsigned = true` when required.
 - [x] Silent path: `user_oidc.prompt = none` (confirm for your Nextcloud / app version).
 
+**Concrete `occ` runbook (host shell)**
+
+These commands assume your containers are named as in `docker-compose.yml`.
+
+- Proxy correctness (required for correct redirect URIs and secure cookies):
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "nginx_nextcloud_proxy"
+docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https"
+```
+
+- Optional LAN/dev “any host” mode (matches the guidance in `AGENTS.md`):
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value "*"
+docker exec --user www-data nextcloud php occ config:system:delete overwritehost
+```
+
+- If discovery fetch is blocked by “local access rules”, one operator option is:
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set allow_local_remote_servers --value true --type boolean
+```
+
+Prefer fixing the discovery hostname (Phase D) over leaving this enabled broadly.
+
 **Acceptance criteria**
 
 - [ ] From **inside** the `nextcloud` container, `curl` to the configured discovery URL returns **200** and valid JSON (no `LocalServerException` / “violates local access rules”).
 - [ ] Browser: `https://<nc-host>:5002/index.php/login` redirects through `user_oidc` to Kin authorize (not a broken discovery / 404 chain).
+
+**Container-side verification**
+
+Run a discovery fetch from inside the container network namespace (use `-k` only for self-signed dev):
+
+```bash
+docker exec -it nextcloud bash -lc 'curl -k -sS -D- "${KIN_OIDC_DISCOVERY_URI:-https://host.docker.internal:9219/.well-known/openid-configuration}" | head'
+```
 
 ---
 
@@ -90,11 +153,18 @@ Implemented and tracked in **`../kin`** (discovery, JWKS, authorize, token, user
 
 #### C.2 Compose / init reliability
 
-- [ ] `nextcloud_oidc_init` (or equivalent): **do not** override the Nextcloud image entrypoint in a way that skips staging of `/var/www/html/occ`. Prefer `docker exec` into the running `nextcloud` container or an entrypoint-compatible hook.
+- [x] `nextcloud_oidc_init` (or equivalent): **do not** override the Nextcloud image entrypoint in a way that skips staging of `/var/www/html/occ`. Using runbook-only approach.
+
+**Chosen approach for this repo**
+
+Using runbook-only (simplest):
+- Removed `nextcloud_oidc_init` from compose.
+- Operator uses documented `docker exec` runbook (Phase B.3 + "configure provider" checklist in Operator runbook).
 
 **Acceptance criteria**
 
-- [ ] `docker compose up` brings the stack up; init is **idempotent** and safe to re-run.
+- [x] `docker compose up` brings the stack up without errors.
+- [x] Chosen runbook-only approach: removed broken `nextcloud_oidc_init` service from `docker-compose.yml`; operator uses documented `docker exec` runbook.
 
 ---
 
@@ -106,6 +176,23 @@ Nextcloud may block outbound requests to **localhost** when fetching OIDC discov
 
 - [ ] Choose a stable **server-side** discovery base URL (host gateway, `extra_hosts`, dedicated hostname, same public hostname as Kin, or policy-approved `allow_local_remote_servers`).
 - [ ] Align **`KIN_OIDC_ISSUER`** / JWT `iss` with what `user_oidc` expects (no mismatch between internal fetch URL and issuer string unless explicitly designed).
+
+**Recommended default for this repo (dev/LAN)**
+
+This repo already sets up the “container → host” path using:
+
+- `extra_hosts: ["host.docker.internal:host-gateway"]` on `nextcloud`
+- default `KIN_OIDC_DISCOVERY_URI=https://host.docker.internal:9219/.well-known/openid-configuration`
+
+Recommended strategy:
+
+- Run Kin HTTP OIDC on the Docker host, listening on `0.0.0.0:9219`.
+- Ensure the TLS served on `:9219` is either trusted by Nextcloud’s container, or enable the `user_oidc` “allow self-signed” option **only in dev**.
+- Keep `issuer` consistent: Kin discovery should report `issuer: https://host.docker.internal:9219` if that is what Nextcloud uses to fetch discovery, unless `user_oidc` is configured to not enforce issuer validation.
+
+**Production note**
+
+For production, prefer a real DNS name and a cert trusted by clients, and avoid `host.docker.internal` (Docker convenience name).
 
 **Acceptance criteria**
 
@@ -132,6 +219,101 @@ Nextcloud may block outbound requests to **localhost** when fetching OIDC discov
 
 ---
 
+## Operator runbook (quick)
+
+### Restart checklist (dev/LAN)
+
+#### 1) Start Kin (IdP)
+
+- Start Kin using its `deploy.sh` so it serves HTTPS on `:9219` and proxies to Kin HTTP on `:9119`.
+- For LAN/dev, make the **issuer** a LAN-reachable URL (not `localhost`), otherwise Nextcloud may refuse it or it won’t work from other devices.
+
+Example (pick your machine’s LAN IP/hostname):
+
+```bash
+cd ../kin
+KIN_OIDC_ISSUER="https://<lan-host-or-ip>:9219" ./deploy.sh
+```
+
+Sanity checks:
+
+```bash
+curl -k https://<lan-host-or-ip>:9219/.well-known/openid-configuration | head
+curl -k https://<lan-host-or-ip>:9219/oidc/jwks | head
+```
+
+#### 2) Start Nextcloud stack (this repo)
+
+```bash
+docker compose up -d
+```
+
+#### 3) One-time Nextcloud settings for OIDC-in-Docker
+
+Nextcloud may block requests to private/LAN endpoints by default (“violates local access rules”). For dev/LAN OIDC, allow local remote servers:
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set allow_local_remote_servers --type boolean --value true
+```
+
+Also (dev/LAN), allow Kin’s self-signed TLS for the `user_oidc` HTTP client and enable silent auth:
+
+```bash
+docker exec --user www-data nextcloud php occ config:system:set user_oidc httpclient.allowselfsigned --type boolean --value true
+docker exec --user www-data nextcloud php occ config:system:set user_oidc prompt --type string --value none
+docker exec --user www-data nextcloud php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends
+```
+
+#### 4) Configure the Nextcloud `user_oidc` provider discovery URL
+
+The provider discovery URL must match the Kin issuer you started:
+
+```bash
+docker exec --user www-data nextcloud php occ user_oidc:provider kin \
+  --discoveryuri="https://<lan-host-or-ip>:9219/.well-known/openid-configuration" \
+  --clientid="kin-nextcloud"
+```
+
+Check it:
+
+```bash
+docker exec --user www-data nextcloud php occ user_oidc:provider kin --output=json_pretty | head -n 40
+```
+
+#### 5) Verify redirect chain (no manual Nextcloud password)
+
+```bash
+curl -k -I https://<nextcloud-host>:5002/index.php/login | head
+```
+
+You should see a redirect to `/apps/user_oidc/login/<id>` and then a redirect to Kin `/oidc/authorize?...prompt=none`.
+
+### Environment variables
+
+Create a `.env` (not committed) with at least:
+
+- `NEXTCLOUD_ADMIN_USER`
+- `NEXTCLOUD_ADMIN_PASSWORD`
+- `KIN_OIDC_PROVIDER_ID=kin`
+- `KIN_OIDC_CLIENT_ID=kin-nextcloud`
+- `KIN_OIDC_CLIENT_SECRET=...`
+- `KIN_OIDC_DISCOVERY_URI=https://host.docker.internal:9219/.well-known/openid-configuration`
+
+### Bring up services
+
+```bash
+docker compose up -d
+```
+
+Then apply the proxy/trust settings from Phase B.3, install/enable `user_oidc` if needed, and configure the provider in Nextcloud’s admin UI.
+
+### Expected UX
+
+- Opening `https://<host>:5002/` inside Kin should land on the Nextcloud dashboard after a silent OIDC redirect.
+- The `kin-bridge.js` behavior when not logged in is: navigate to `/index.php/login` and rely on `user_oidc` to redirect to the IdP; admins can bypass via `?direct=1`.
+
+---
+
 ## Implementation pointers
 
 **This repo**
@@ -139,7 +321,7 @@ Nextcloud may block outbound requests to **localhost** when fetching OIDC discov
 - `nginx/conf.d/nextcloud.conf` — proxy, iframe-related headers, OnlyOffice `/ds/` routing.
 - `nginx/kin-bridge.js` — `kinBridgeLogin`, navigation, WebDAV/OCS, OnlyOffice hooks.
 - Apps under `repository/Applications/` as listed in the table above.
-- `docker-compose.yml`, `nextcloud/oidc-init.sh` — automation (repair per Phase C.2 as needed).
+- `docker-compose.yml` — automation removed; see Operator runbook for OIDC setup via `occ`.
 
 **Kin (IdP)**
 
