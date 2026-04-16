@@ -416,11 +416,23 @@
         }
 
         var fetchBody = body || null;
-        if (body && typeof body !== 'string' && (body.constructor && body.constructor.name === 'Uint8Array' || Array.isArray(body))) {
-            if (Array.isArray(body)) {
+        var bodyType = 'null';
+        var bodyPreview = '';
+        if (body) {
+            if (typeof body === 'string') {
+                bodyType = 'string(' + body.length + ')';
+                bodyPreview = body.substring(0, 16);
+            } else if (body.constructor && body.constructor.name === 'Uint8Array') {
+                bodyType = 'Uint8Array(' + body.length + ')';
+                bodyPreview = 'firstbytes:' + body[0] + ',' + body[1] + ',' + body[2] + ',' + body[3];
+                fetchBody = body;
+            } else if (Array.isArray(body)) {
+                bodyType = 'Array(' + body.length + ')';
+                bodyPreview = 'firstbytes:' + body[0] + ',' + body[1] + ',' + body[2] + ',' + body[3];
                 fetchBody = new Uint8Array(body);
             }
         }
+        log('handleWebDAV:', method, url, 'body:', bodyType, 'ct:', headers['Content-Type'], bodyPreview);
 
         fetch(url, {
             method: method || 'PROPFIND',
