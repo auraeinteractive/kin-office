@@ -415,12 +415,19 @@
             headers['X-Requested-With'] = 'XMLHttpRequest';
         }
 
+        var fetchBody = body || null;
+        if (body && typeof body !== 'string' && (body.constructor && body.constructor.name === 'Uint8Array' || Array.isArray(body))) {
+            if (Array.isArray(body)) {
+                fetchBody = new Uint8Array(body);
+            }
+        }
+
         fetch(url, {
             method: method || 'PROPFIND',
             credentials: 'include',
             cache: 'no-store',
             headers: headers,
-            body: body || null
+            body: fetchBody
         }).then(function(resp) {
             var contentType = resp.headers && resp.headers.get ? (resp.headers.get('content-type') || '') : '';
             if (responseType === 'base64') {

@@ -4,6 +4,40 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${ROOT}/.config.ini"
 
+show_help() {
+  cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+
+Options:
+  --help     Show this help message
+  --restart  Restart containers (stop, then start)
+
+Environment:
+  Config is read from ${CONFIG_FILE}
+  Required keys: KIN_OIDC_HOST, NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASSWORD
+EOF
+}
+
+RESTART_MODE=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help)
+      show_help
+      exit 0
+      ;;
+    --restart)
+      RESTART_MODE=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      show_help >&2
+      exit 1
+      ;;
+  esac
+done
+
 require_key() {
   local key="$1"
   local value
@@ -34,4 +68,8 @@ NEXTCLOUD_ADMIN_PASSWORD="$(require_key NEXTCLOUD_ADMIN_PASSWORD)"
 export KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:9219/.well-known/openid-configuration"
 
 cd "${ROOT}"
-docker compose up -d --wait --timeout 180
+if [[ "${RESTART_MODE}" == true ]]; then
+  docker compose restart
+else
+  docker compose up -d --wait --timeout 180
+fi
