@@ -94,25 +94,28 @@ docker compose up -d --build
 
 ## Configuration
 
-All configuration is now handled automatically by `deploy.sh`. On first run, it:
+All configuration is handled automatically by `deploy.sh`. On first run, it:
 
 1. Starts Nextcloud, OnlyOffice, and Nginx containers
-2. Configures OIDC with Kin as the identity provider
-3. Installs and configures OnlyOffice connector
-4. Sets up proxy trust and HTTPS handling
+2. Prompts for which Kin user should be Nextcloud admin
+3. Configures OIDC with Kin as the identity provider
+4. Adds the Kin admin user to Nextcloud's admin group
+5. Sets up proxy trust and HTTPS handling
 
-For manual overrides, the following environment variables can be set in `.config.ini`:
+For manual overrides, the following can be set in `.config.ini`:
 
 ```ini
 KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
 KIN_OIDC_HOST=10.193.161.60
-NEXTCLOUD_ADMIN_USER=admin
+KIN_NEXTCLOUD_ADMIN_USER=hogne
 NEXTCLOUD_ADMIN_PASSWORD=admin
 ```
 
+**Important:** The `KIN_NEXTCLOUD_ADMIN_USER` is the Kin username that will get Nextcloud admin privileges. This user must first log in via OIDC (use a user app like mail or onlyoffice) before they can be added to the admin group.
+
 If not specified:
 - `KIN_OIDC_HOST` auto-detects the primary IP via `hostname -I`
-- `NEXTCLOUD_ADMIN_USER` defaults to current user
+- `KIN_NEXTCLOUD_ADMIN_USER` prompts interactively
 - `NEXTCLOUD_ADMIN_PASSWORD` defaults to `admin`
 
 ## Kin OS

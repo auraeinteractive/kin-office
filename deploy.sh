@@ -130,6 +130,25 @@ fi
 cd "${ROOT}"
 docker compose up -d --wait --timeout 180
 
+# === Prompt for Kin Nextcloud Admin User ===
+
+export KIN_NEXTCLOUD_ADMIN_USER
+KIN_NEXTCLOUD_ADMIN_USER="$(optional_key KIN_NEXTCLOUD_ADMIN_USER)"
+if [[ -z "${KIN_NEXTCLOUD_ADMIN_USER}" ]]; then
+  echo ""
+  echo "Which Kin user should be Nextcloud admin?"
+  echo "Enter the username (e.g. hogne):"
+  read -r KIN_NEXTCLOUD_ADMIN_USER
+  if [[ -z "${KIN_NEXTCLOUD_ADMIN_USER}" ]]; then
+    echo "deploy.sh: ERROR: No Kin admin user specified" >&2
+    exit 1
+  fi
+  echo "KIN_NEXTCLOUD_ADMIN_USER=${KIN_NEXTCLOUD_ADMIN_USER}" >> "${CONFIG_FILE}"
+  echo "deploy.sh: Added KIN_NEXTCLOUD_ADMIN_USER to ${CONFIG_FILE}"
+else
+  echo "deploy.sh: Using configured Kin admin user: ${KIN_NEXTCLOUD_ADMIN_USER}"
+fi
+
 # === OIDC Configuration for Nextcloud ===
 
 KIN_OIDC_CLIENT_SECRET="${KIN_OIDC_CLIENT_SECRET:-kin-nextcloud-secret}"
@@ -165,6 +184,17 @@ docker exec --user www-data nextcloud php occ user_oidc:provider kin \
   --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
   --unique-uid=0 \
   --mapping-display-name="preferred_username" 2>/dev/null || true
+
+# 6. Add Kin admin user to Nextcloud admin group
+echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
+docker exec --user www-data nextcloud php occ group:adduser admin "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null || true
+# Verify user is in admin group
+USER_GROUPS=$(docker exec --user www-data nextcloud php occ user:info "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null | grep -A10 "groups:" || true)
+if echo "${USER_GROUPS}" | grep -q "admin"; then
+  echo "deploy.sh: ${KIN_NEXTCLOUD_ADMIN_USER} is in admin group"
+else
+  echo "deploy.sh: WARNING: ${KIN_NEXTCLOUD_ADMIN_USER} may not be in admin group yet (user might not exist until first OIDC login)"
+fi
 
 echo "deploy.sh: OIDC configuration complete."
 echo ""
