@@ -3,6 +3,11 @@
 ## Goal
 Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `https://<host>:5002` using a self-signed certificate, with integration into Kin OS.
 
+## Technical Decisions
+
+- **Shadow DOM** - Kin apps use Shadow DOM (not light DOM) to encapsulate styles and enable proper web component development
+- No `prototype/` folder - all code goes directly into `repository/Applications/`
+
 ## Architecture
 ```
 Kin Workspace (Browser)
