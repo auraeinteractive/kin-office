@@ -166,11 +166,6 @@ docker exec --user www-data nextcloud php occ user_oidc:provider kin \
   --unique-uid=0 \
   --mapping-display-name="preferred_username" 2>/dev/null || true
 
-# 6. Install and configure OnlyOffice
-echo "deploy.sh: Installing OnlyOffice..."
-docker exec --user www-data nextcloud php occ app:install onlyoffice 2>/dev/null || true
-docker exec --user www-data nextcloud php occ app:enable onlyoffice 2>/dev/null || true
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value "/ds/" 2>/dev/null || true
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value "http://onlyoffice/" 2>/dev/null || true
-
-echo "deploy.sh: OIDC and OnlyOffice configuration complete."
+echo "deploy.sh: OIDC configuration complete."
+echo ""
+echo "IMPORTANT: Install OnlyOffice from the Nextcloud App Store (/settings/apps) and configure it there."

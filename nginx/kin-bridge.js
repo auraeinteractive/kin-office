@@ -617,6 +617,36 @@
         }
     });
 
+    // --- URL change detection for SPA navigation ---
+
+    function handleUrlChange() {
+        var status = getStatus();
+        log('URL changed to:', status.url);
+        log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage);
+
+        // Re-apply toolbar hiding for OnlyOffice
+        if (isOnlyOfficeContext()) {
+            ensureToolbarHidden();
+        }
+
+        if (status.isLoggedIn) {
+            postToParent({
+                type: 'kinBridgeStatusChange',
+                isNextcloud: true,
+                isLoggedIn: true,
+                currentUser: status.currentUser,
+                url: status.url
+            });
+            return;
+        }
+
+        if (status.isLoginPage) {
+            setTimeout(function() {
+                startOidcLogin();
+            }, 250);
+        }
+    }
+
     // --- Init ---
 
     function init() {
@@ -624,7 +654,7 @@
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
 
-// Hide toolbar for OnlyOffice iframe (other apps), not for main Nextcloud header
+        // Hide toolbar for OnlyOffice iframe
         if (isOnlyOfficeContext()) {
             ensureToolbarHidden();
         }
@@ -659,6 +689,29 @@
                 startOidcLogin();
             }, 250);
         }
+
+        // Watch for URL changes (SPA navigation within Nextcloud)
+        var lastUrl = status.url;
+        if (typeof MutationObserver !== 'undefined') {
+            window.__kinBridgeUrlObserver = new MutationObserver(function() {
+                if (window.location.href !== lastUrl) {
+                    lastUrl = window.location.href;
+                    handleUrlChange();
+                }
+            });
+            window.__kinBridgeUrlObserver.observe(document.documentElement, {
+                childList: true,
+                subtree: true
+            });
+        }
+
+        // Also handle popstate for back/forward navigation
+        window.addEventListener('popstate', function() {
+            if (window.location.href !== lastUrl) {
+                lastUrl = window.location.href;
+                handleUrlChange();
+            }
+        });
     }
 
     if (document.readyState === 'loading') {

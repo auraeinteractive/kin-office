@@ -8,6 +8,13 @@ Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `htt
 - **NEVER delete existing config or volumes** unless strictly asking and getting authority from the user!
 - Always assume existing data is precious and should be preserved
 - When in doubt, ask before making destructive changes
+- **DO NOT modify docker-compose.yml** - The onlyoffice container is required for the DocumentServer that the Nextcloud OnlyOffice app connects to
+- **DO NOT modify deploy.sh** - The OnlyOffice app installation via occ is not the right way; onlyoffice docker container provides the DocumentServer
+- **OnlyOffice app** - The Nextcloud app itself is installed from Nextcloud's App Store (`/settings/apps`), not via docker or deploy.sh
+- **Keep docker-compose.yml and .config.ini in sync** - Changing NEXTCLOUD_ADMIN_PASSWORD in one requires changing in both, or Nextcloud will be stuck in retry loop on restart
+- **Recreate containers only, not volumes** - Use `docker compose rm -f <service>` followed by `docker compose up -d <service>`, never `docker compose down -v`
+- **After container changes, restart nginx** - Nginx proxy may need restart to reconnect: `docker compose restart nginx`
+- **When Nextcloud shows "Login is invalid because files already exist"** - The admin password in docker-compose.yml doesn't match existing data; either use the original password or accept that data may need re-setup
 
 ## Technical Decisions
 
