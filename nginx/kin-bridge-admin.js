@@ -351,21 +351,46 @@
         }, true);
     }
 
-    // --- Login via OIDC (silent) ---
+    // --- Admin login (direct form) ---
 
-    function startOidcLogin() {
-        try {
-            var u = new URL(window.location.href);
-            // Allow admins to force the local login form.
-            if (u.searchParams.get('direct') === '1') {
-                log('Login direct=1 requested; not starting OIDC');
-                return;
+    var ADMIN_LOGIN = { username: 'admin', password: 'admin' };
+
+    function startAdminLogin() {
+        var token = getRequestToken();
+        var formData = new FormData();
+        formData.append('user', ADMIN_LOGIN.username);
+        formData.append('password', ADMIN_LOGIN.password);
+        if (token) {
+            formData.append('requesttoken', token);
+        }
+        formData.append('timezone-offset', String(new Date().getTimezoneOffset() / -60));
+        formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+
+        fetch('/index.php/login', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+            redirect: 'manual'
+        }).then(function(resp) {
+            if (resp.type === 'opaqueredirect' || resp.status === 303 || resp.status === 302 || resp.status === 0) {
+                log('Admin login succeeded');
+                window.location.href = '/index.php/apps/dashboard/';
+            } else {
+                log('Admin login failed:', resp.status);
+                postToParent({
+                    type: 'kinBridgeError',
+                    error: 'Admin login failed',
+                    action: 'login'
+                });
             }
-        } catch (_e) {}
-
-        // If user_oidc is configured with allow_multiple_user_backends=0, /login auto-redirects to the IdP.
-        // This keeps the user out of the Nextcloud login form entirely.
-        window.location.href = '/index.php/login';
+        }).catch(function(err) {
+            log('Admin login error:', err.message);
+            postToParent({
+                type: 'kinBridgeError',
+                error: err.message,
+                action: 'login'
+            });
+        });
     }
 
     // --- Logout ---
@@ -375,10 +400,6 @@
         var logoutUrl = '/index.php/logout';
         if (token) {
             logoutUrl += '?requesttoken=' + encodeURIComponent(token);
-        }
-        // If switching to admin, go to login page with direct=1 after logout
-        if (data && data.switchToAdmin) {
-            logoutUrl += '&redirect=/login%3Fdirect%3D1';
         }
         window.location.href = logoutUrl;
     }
@@ -687,10 +708,10 @@
             url: status.url
         });
 
-        // If Nextcloud shows a login form, start OIDC immediately.
+        // If Nextcloud shows a login form, start admin login immediately.
         if (status.isLoginPage) {
             setTimeout(function() {
-                startOidcLogin();
+                startAdminLogin();
             }, 250);
         }
 

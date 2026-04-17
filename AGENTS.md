@@ -15,6 +15,7 @@ Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `htt
 - **Recreate containers only, not volumes** - Use `docker compose rm -f <service>` followed by `docker compose up -d <service>`, never `docker compose down -v`
 - **After container changes, restart nginx** - Nginx proxy may need restart to reconnect: `docker compose restart nginx`
 - **When Nextcloud shows "Login is invalid because files already exist"** - The admin password in docker-compose.yml doesn't match existing data; either use the original password or accept that data may need re-setup
+- **kinnextcloud app (admin)** - Requires a fresh browser session (incognito/private window) to login as admin, because OIDC remembers the user session
 
 ## Technical Decisions
 
