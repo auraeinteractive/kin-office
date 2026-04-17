@@ -210,6 +210,8 @@ docker exec --user www-data nextcloud php occ app:enable onlyoffice 2>/dev/null 
 ONLYOFFICE_URL="https://${KIN_OIDC_HOST}:5002/ds/"
 echo "deploy.sh: Configuring OnlyOffice DocumentServerUrl to ${ONLYOFFICE_URL}..."
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://onlyofficedocs/" 2>/dev/null || true
+docker exec --user www-data nextcloud php occ config:app:delete onlyoffice settings_error 2>/dev/null || true
 
 echo "deploy.sh: OIDC configuration complete."
 echo ""
