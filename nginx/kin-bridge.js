@@ -624,8 +624,10 @@
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
 
-// Hide toolbar for OnlyOffice iframe
-        ensureToolbarHidden();
+// Hide toolbar for OnlyOffice iframe (other apps), not for main Nextcloud header
+        if (isOnlyOfficeContext()) {
+            ensureToolbarHidden();
+        }
 
         // Intercept new window requests
         interceptNewWindowAttempts();
