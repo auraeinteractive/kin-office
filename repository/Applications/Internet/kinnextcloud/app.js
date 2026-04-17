@@ -73,6 +73,7 @@
             instanceId: INSTANCE_ID,
             menus: {
                 File: [
+                    { name: 'Switch to admin', command: 'nextcloud.switchAdmin' },
                     { name: 'Log out', command: 'nextcloud.logout' }
                 ]
             }
@@ -83,6 +84,10 @@
         if (cmd === 'nextcloud.logout') {
             setLoading('Logging out…');
             sendToBridge('kinBridgeLogout');
+        }
+        if (cmd === 'nextcloud.switchAdmin') {
+            setLoading('Loading admin login…');
+            sendToBridge('kinBridgeNavigate', { path: '/login?direct=1' });
         }
     }
 
