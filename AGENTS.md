@@ -3,6 +3,12 @@
 ## Goal
 Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `https://<host>:5002` using a self-signed certificate, with integration into Kin OS.
 
+## Important Operational Rules
+
+- **NEVER delete existing config or volumes** unless strictly asking and getting authority from the user!
+- Always assume existing data is precious and should be preserved
+- When in doubt, ask before making destructive changes
+
 ## Technical Decisions
 
 - **Shadow DOM** - Kin apps use Shadow DOM (not light DOM) to encapsulate styles and enable proper web component development
@@ -80,42 +86,26 @@ docker compose up -d --build
 
 ## Configuration
 
-Nextcloud credentials (set via environment / `.env` for `docker-compose.yml`):
-- `NEXTCLOUD_ADMIN_USER`
-- `NEXTCLOUD_ADMIN_PASSWORD`
+All configuration is now handled automatically by `deploy.sh`. On first run, it:
 
-OIDC provider discovery (dev/LAN):
-- Run Kin IdP on a LAN-reachable issuer (avoid `localhost`): `KIN_OIDC_ISSUER="https://<lan-host-or-ip>:9219" ../kin/deploy.sh`
-- Nextcloud may block LAN/private outbound URLs unless enabled:
+1. Starts Nextcloud, OnlyOffice, and Nginx containers
+2. Configures OIDC with Kin as the identity provider
+3. Installs and configures OnlyOffice connector
+4. Sets up proxy trust and HTTPS handling
 
-```bash
-docker exec --user www-data nextcloud php occ config:system:set allow_local_remote_servers --type boolean --value true
+For manual overrides, the following environment variables can be set in `.config.ini`:
+
+```ini
+KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
+KIN_OIDC_HOST=10.193.161.60
+NEXTCLOUD_ADMIN_USER=admin
+NEXTCLOUD_ADMIN_PASSWORD=admin
 ```
 
-Nextcloud CSRF protection must be disabled for auto-login to work:
-```bash
-docker exec --user www-data nextcloud php occ config:system:set csrf.disabled --value true --type boolean
-```
-
-Nextcloud must trust the proxy:
-```bash
-docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "nginx_nextcloud_proxy"
-docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https"
-```
-
-For dynamic LAN/browser host access (no hardcoded hostname/IP):
-```bash
-docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value "*"
-docker exec --user www-data nextcloud php occ config:system:delete overwritehost
-```
-
-OnlyOffice connector configuration (auto-configured on first setup):
-```bash
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value "/ds/"
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value "http://onlyoffice/"
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value "http://nextcloud/"
-docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value "true"
-```
+If not specified:
+- `KIN_OIDC_HOST` auto-detects the primary IP via `hostname -I`
+- `NEXTCLOUD_ADMIN_USER` defaults to current user
+- `NEXTCLOUD_ADMIN_PASSWORD` defaults to `admin`
 
 ## Kin OS
 
