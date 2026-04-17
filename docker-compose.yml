@@ -8,15 +8,27 @@ services:
     ports:
       - "8081:80"
     environment:
-      - NEXTCLOUD_ADMIN_USER=${NEXTCLOUD_ADMIN_USER}
-      - NEXTCLOUD_ADMIN_PASSWORD=${NEXTCLOUD_ADMIN_PASSWORD}
+      - NEXTCLOUD_ADMIN_USER=admin
+      - NEXTCLOUD_ADMIN_PASSWORD=admin
       - NEXTCLOUD_TRUSTED_DOMAINS=*
       - SQLITE_DATABASE=nextcloud
     volumes:
-      - ./nextcloud/data:/var/www/html/data
-      - ./nextcloud/config:/var/www/html/config
+      - nextcloud_data:/var/www/html/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - nextcloud_network
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    container_name: onlyoffice
+    restart: unless-stopped
+    ports:
+      - "5003:80"
+    environment:
+      - JWT_ENABLED=false
+      - ALLOW_PRIVATE_IP_ADDRESS=true
+      - ALLOW_META_IP_ADDRESS=true
     networks:
       - nextcloud_network
 
@@ -32,6 +44,7 @@ services:
       - ./nginx/kin-bridge.js:/etc/nginx/kin-bridge.js:ro
     depends_on:
       - nextcloud
+      - onlyoffice
     networks:
       nextcloud_network:
         aliases:
@@ -40,3 +53,6 @@ services:
 networks:
   nextcloud_network:
     driver: bridge
+
+volumes:
+  nextcloud_data:
