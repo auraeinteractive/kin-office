@@ -30,7 +30,9 @@ services:
       - ALLOW_PRIVATE_IP_ADDRESS=true
       - ALLOW_META_IP_ADDRESS=true
     networks:
-      - nextcloud_network
+      nextcloud_network:
+        aliases:
+          - onlyofficedocs
 
   nginx:
     image: nginx:latest

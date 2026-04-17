@@ -199,3 +199,5 @@ fi
 echo "deploy.sh: OIDC configuration complete."
 echo ""
 echo "IMPORTANT: Install OnlyOffice from the Nextcloud App Store (/settings/apps) and configure it there."
+echo ""
+echo "Make sure http://onlyofficedocs is registered as the Document Server in Nextcloud OnlyOffice settings."
