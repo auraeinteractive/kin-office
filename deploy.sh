@@ -201,8 +201,16 @@ else
   echo "deploy.sh: WARNING: ${KIN_NEXTCLOUD_ADMIN_USER} may not be in admin group yet (user might not exist until first OIDC login)"
 fi
 
+# 7. Install and configure OnlyOffice
+echo "deploy.sh: Installing OnlyOffice app..."
+docker exec --user www-data nextcloud php occ app:install onlyoffice 2>/dev/null || true
+docker exec --user www-data nextcloud php occ app:enable onlyoffice 2>/dev/null || true
+
+# Configure OnlyOffice to use nginx proxy (HTTPS)
+ONLYOFFICE_URL="https://${KIN_OIDC_HOST}:5002/ds/"
+echo "deploy.sh: Configuring OnlyOffice DocumentServerUrl to ${ONLYOFFICE_URL}..."
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
+
 echo "deploy.sh: OIDC configuration complete."
 echo ""
-echo "IMPORTANT: Install OnlyOffice from the Nextcloud App Store (/settings/apps) and configure it there."
-echo ""
-echo "Make sure http://onlyofficedocs is registered as the Document Server in Nextcloud OnlyOffice settings."
+echo "OnlyOffice Document Server is configured at ${ONLYOFFICE_URL}"
