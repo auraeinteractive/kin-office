@@ -91,9 +91,13 @@ else
 fi
 
 if [[ -z "${KIN_OIDC_HOST}" ]]; then
-  echo "deploy.sh: missing KIN_OIDC_HOST in ${CONFIG_FILE}" >&2
-  echo "deploy.sh: either set KIN_OIDC_HOST in ${CONFIG_FILE} or configure [OIDC] in Kin config" >&2
-  exit 1
+  # Auto-detect primary IP address
+  KIN_OIDC_HOST=$(hostname -I 2>/dev/null | awk '{print $1}')
+  if [[ -z "${KIN_OIDC_HOST}" ]]; then
+    echo "deploy.sh: ERROR: Could not auto-detect IP address" >&2
+    exit 1
+  fi
+  echo "deploy.sh: Using auto-detected IP: ${KIN_OIDC_HOST}"
 fi
 
 export NEXTCLOUD_ADMIN_USER
