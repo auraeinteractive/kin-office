@@ -130,6 +130,11 @@ fi
 cd "${ROOT}"
 docker compose up -d --wait --timeout 180
 
+# Enable .htaccess processing (AllowOverride) for Nextcloud routing
+echo "deploy.sh: Enabling .htaccess processing..."
+docker exec nextcloud sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf 2>/dev/null || true
+docker exec nextcloud apache2ctl graceful 2>/dev/null || true
+
 # === Prompt for Kin Nextcloud Admin User ===
 
 export KIN_NEXTCLOUD_ADMIN_USER
