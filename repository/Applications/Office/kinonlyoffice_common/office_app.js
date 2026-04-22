@@ -80,6 +80,28 @@ function shellQuote(value) {
     return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+function ensureOnlyOfficeIframeShell() {
+    const html = document.documentElement;
+    const body = document.body;
+    html.style.height = '100%';
+    body.style.margin = '0';
+    body.style.padding = '0';
+    body.style.height = '100%';
+    body.style.overflow = 'hidden';
+    let iframeEl = document.getElementById('iframe');
+    if (!iframeEl) {
+        body.replaceChildren();
+        iframeEl = document.createElement('iframe');
+        iframeEl.id = 'iframe';
+        iframeEl.setAttribute('title', 'OnlyOffice');
+        iframeEl.style.width = '100%';
+        iframeEl.style.height = '100%';
+        iframeEl.style.border = 'none';
+        body.appendChild(iframeEl);
+    }
+    return iframeEl;
+}
+
 export function bootstrapOnlyOfficeApp(config) {
     const appConfig = Object.assign({
         appTag: 'kinonlyoffice',
@@ -88,10 +110,7 @@ export function bootstrapOnlyOfficeApp(config) {
         defaultFilename: 'Document.docx'
     }, config || {});
 
-    const iframeEl = document.getElementById('iframe');
-    if (!iframeEl) {
-        throw new Error('Missing #iframe element');
-    }
+    const iframeEl = ensureOnlyOfficeIframeShell();
 
     const ORIGIN = window.location.origin;
     const params = new URLSearchParams(window.location.search);

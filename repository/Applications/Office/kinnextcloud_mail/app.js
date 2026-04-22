@@ -35,11 +35,30 @@ function setLoading(text) {
     }
 }
 
-export function bootstrapNextcloudMail() {
-    const iframeEl = document.getElementById('iframe');
-    if (!iframeEl) {
-        throw new Error('Missing #iframe element');
+function ensureNextcloudMailShell() {
+    const html = document.documentElement;
+    const body = document.body;
+    html.style.height = '100%';
+    let loading = document.getElementById('loading');
+    let iframeEl = document.getElementById('iframe');
+    if (loading && iframeEl) {
+        return iframeEl;
     }
+    body.replaceChildren();
+    loading = document.createElement('div');
+    loading.id = 'loading';
+    loading.textContent = 'Connecting to Nextcloud…';
+    iframeEl = document.createElement('iframe');
+    iframeEl.id = 'iframe';
+    iframeEl.title = 'Nextcloud Mail';
+    iframeEl.src = 'about:blank';
+    body.appendChild(loading);
+    body.appendChild(iframeEl);
+    return iframeEl;
+}
+
+export function bootstrapNextcloudMail() {
+    const iframeEl = ensureNextcloudMailShell();
 
     const ORIGIN = window.location.origin;
     const instanceId = getInstanceId();

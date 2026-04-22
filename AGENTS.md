@@ -44,6 +44,7 @@ Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
 - `nginx/kin-bridge.js` - JavaScript bridge injected into Nextcloud pages
 
 ### Kin Apps
+- Each app uses **`manifest.json` `entry`: `main.js`**, which opens the UI via **`kin.classes.Window`** and a view script (**`app.js`**) under **`/application.html`** (see main Kin repo `docs/how_to_write_kinapp.md`). Do not use per-package **`index.html`** as the primary entry.
 - `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app
 - `repository/Applications/Office/kinonlyoffice_documents/` - launcher for new text documents
 - `repository/Applications/Office/kinonlyoffice_spreadsheets/` - launcher for new spreadsheets

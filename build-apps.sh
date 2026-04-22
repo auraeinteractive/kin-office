@@ -88,7 +88,7 @@ if [ -d "$SOURCE_DIR" ]; then
     echo "Source: $SOURCE_DIR"
     echo "Destination: $BUILD_DIR"
     echo "Copying files..."
-    rsync -av "$SOURCE_DIR/" "$BUILD_DIR/"
+    rsync -av --delete "$SOURCE_DIR/" "$BUILD_DIR/"
     echo "Done. Apps built to $BUILD_DIR"
 else
     echo "Error: No repository directory found at $SOURCE_DIR"
