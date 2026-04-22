@@ -139,7 +139,6 @@ export function bootstrapOnlyOfficeApp(config) {
     let currentOnlyOfficePath = null;
     let currentKinPath = null;
     let autosavePollingInterval = null;
-    let lastAutosaveCheck = 0;
 
     const instanceId = getInstanceId();
 
@@ -765,56 +764,66 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    const AUTOSAVE_POLL_INTERVAL_MS = 15000;
+    const AUTOSAVE_DEBOUNCE_MS = 3000;
+    const AUTOSAVE_FALLBACK_POLL_MS = 30000;
+    let autosaveSyncing = false;
+    let autosaveLastSignature = '';
+    let autosaveDebounceTimer = null;
 
-    async function startAutosavePolling() {
+    async function autosaveSyncNow(reason) {
+        if (autosaveSyncing) return;
+        if (!currentKinPath) return;
+        autosaveSyncing = true;
+        try {
+            const ctx = await getOnlyOfficeContext();
+            const sourcePath = (ctx && ctx.filePath) ? String(ctx.filePath) : currentOnlyOfficePath;
+            if (!sourcePath) return;
+
+            const fingerprint = await getNextcloudFileFingerprint(sourcePath);
+            const sig = fingerprint ? fingerprint.signature : '';
+            if (sig && sig !== autosaveLastSignature) {
+                log('Autosave (' + reason + '): syncing to', currentKinPath);
+                await flushOnlyOfficeEdits(sourcePath);
+                await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
+                autosaveLastSignature = sig;
+                log('Autosave sync complete');
+            }
+        } catch (error) {
+            log('Autosave sync error:', error && error.message ? error.message : error);
+        } finally {
+            autosaveSyncing = false;
+        }
+    }
+
+    function scheduleAutosaveDebounce() {
+        if (!currentKinPath) return;
+        if (autosaveDebounceTimer) clearTimeout(autosaveDebounceTimer);
+        autosaveDebounceTimer = setTimeout(function() {
+            autosaveDebounceTimer = null;
+            autosaveSyncNow('keydown-debounce');
+        }, AUTOSAVE_DEBOUNCE_MS);
+    }
+
+    function startAutosavePolling() {
         if (autosavePollingInterval) return;
         if (!currentKinPath) return;
-        const context = await getOnlyOfficeContext();
-        if (!context || !context.filePath) return;
-        
-        log('Starting autosave polling for', currentKinPath);
-        let lastSavedSize = 0;
-        
-        autosavePollingInterval = setInterval(async () => {
-            try {
-                log('Autosave poll check...');
-                const ctx = await getOnlyOfficeContext();
-                if (!ctx || !ctx.filePath) {
-                    log('Autosave: no OnlyOffice context');
-                    return;
-                }
-                
-                log('Autosave: currentKinPath=', currentKinPath, 'filePath=', ctx.filePath);
-                if (!currentKinPath) {
-                    log('Autosave: no currentKinPath, skipping');
-                    return;
-                }
-                
-                const bytes = await readNextcloudFileBytes(ctx.filePath);
-                const currentSize = bytes ? bytes.length : 0;
-                
-                log('Autosave: currentSize=', currentSize, 'lastSavedSize=', lastSavedSize);
-                
-                if (currentSize !== lastSavedSize && currentSize > 0) {
-                    log('Autosave detected, syncing to', currentKinPath);
-                    await flushOnlyOfficeEdits(ctx.filePath);
-                    await saveNextcloudFileToKinPath(ctx.filePath, currentKinPath);
-                    lastSavedSize = currentSize;
-                    log('Autosave sync complete');
-                }
-            } catch (error) {
-                log('Autosave poll error:', error && error.message ? error.message : error);
-            }
-        }, AUTOSAVE_POLL_INTERVAL_MS);
+
+        log('Starting autosave (debounced keydown + fallback poll) for', currentKinPath);
+        autosavePollingInterval = setInterval(function() {
+            autosaveSyncNow('fallback-poll');
+        }, AUTOSAVE_FALLBACK_POLL_MS);
     }
 
     function stopAutosavePolling() {
         if (autosavePollingInterval) {
             clearInterval(autosavePollingInterval);
             autosavePollingInterval = null;
-            log('Stopped autosave polling');
         }
+        if (autosaveDebounceTimer) {
+            clearTimeout(autosaveDebounceTimer);
+            autosaveDebounceTimer = null;
+        }
+        log('Stopped autosave');
     }
 
     async function readKinFileBytes(kinPath) {
@@ -1028,15 +1037,10 @@ export function bootstrapOnlyOfficeApp(config) {
                         await withBusy('Saving to Kin path...', async function() {
                             await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
                         });
-                        await openAlert('Saved to ' + currentKinPath + '.', 'Saved');
                     } catch (saveError) {
                         log('Save to Kin failed:', saveError && saveError.message ? saveError.message : saveError);
                         await openAlert('Save failed: ' + (saveError && saveError.message ? saveError.message : String(saveError)), 'Error');
                     }
-                } else if (context && context.filePath) {
-                    await openAlert('OnlyOffice autosaves this document in Nextcloud.\n\nCurrent file: ' + context.filePath, 'Saved');
-                } else {
-                    await openAlert('OnlyOffice autosaves documents after they are opened.');
                 }
                 return;
             }
@@ -1061,7 +1065,6 @@ export function bootstrapOnlyOfficeApp(config) {
                     });
                     currentKinPath = targetKinPath;
                     startAutosavePolling();
-                    await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                     return;
                 }
                 await withBusy('Saving copy in Nextcloud...', async function() {
@@ -1103,7 +1106,6 @@ export function bootstrapOnlyOfficeApp(config) {
                 });
                 currentKinPath = targetKinPath;
                 startAutosavePolling();
-                await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                 return;
             }
             const split = splitNextcloudPath(targetPath);
@@ -1207,6 +1209,10 @@ export function bootstrapOnlyOfficeApp(config) {
 
             case 'kinBridgeOnlyOfficeRequestSaveAs':
                 await handleOnlyOfficeSaveAsRequest(data);
+                break;
+
+            case 'kinBridgeEditorKeydown':
+                scheduleAutosaveDebounce();
                 break;
 
             case 'kinBridgeOpenWindow':

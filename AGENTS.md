@@ -51,6 +51,7 @@ Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
 - `repository/Applications/Office/kinonlyoffice_presentations/` - launcher for new presentations
 - `repository/Applications/Office/kinonlyoffice_common/` - shared launcher logic for OnlyOffice apps
 - All apps communicate with Nextcloud via postMessage bridge
+- **Kin workspace:** After `build-apps.sh` rsync, the `kinonlyoffice_*` package ids must stay distinct in the Kin app catalog. The main Kin repo should **not** map them to `remote_onlyoffice` in `clients/workspace/scripts/base.js` (`normalizeRepoPackageId`); that legacy remap would send the app menu to the wrong package even though these launchers are installed.
 
 ## kin-bridge.js API
 

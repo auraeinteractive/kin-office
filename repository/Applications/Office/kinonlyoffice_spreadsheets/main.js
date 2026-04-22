@@ -12,6 +12,9 @@
             return;
         }
         var pkg = qp( 'kin_repo_package' ) || 'kinonlyoffice_spreadsheets';
+        var q = {};
+        var openPath = qp( 'kin_open_path' ) || qp( 'path' );
+        if( openPath ) q.kin_open_path = openPath;
         new kin.classes.Window( {
             entry: 'app.js',
             packageId: pkg,
@@ -20,6 +23,7 @@
             height: 768,
             quitOnClose: true,
             module: true,
+            query: q,
             assets: [
                 { type: 'css', href: '../kin_ui/theme/kin-ui.css' },
                 { type: 'css', href: '../kinonlyoffice_common/onlyoffice-shell.css' }

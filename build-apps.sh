@@ -64,6 +64,9 @@ install_to_kin() {
     echo "Copying files with verbose rsync..."
     rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/"
     echo "Apps installed to Kin build."
+    # `kinonlyoffice_*` are real package ids in this tree. The Kin repo workspace must not
+    # rewrite them to `remote_onlyoffice` in clients/workspace/scripts/base.js:normalizeRepoPackageId
+    # or the app menu will open the wrong package after rsync.
 }
 
 load_config

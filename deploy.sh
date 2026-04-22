@@ -161,9 +161,23 @@ KIN_OIDC_CLIENT_SECRET="${KIN_OIDC_CLIENT_SECRET:-kin-nextcloud-secret}"
 echo "deploy.sh: Configuring Nextcloud OIDC with Kin at ${KIN_OIDC_HOST}:9219..."
 
 # 1. Proxy trust settings
+# Nextcloud expects the reverse proxy *IP* (CIDR or single address), not a Docker DNS name. Without this,
+# X-Forwarded-Proto/Host and generated URLs for OnlyOffice can be wrong.
 echo "deploy.sh: Setting proxy trust..."
-docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "nginx_nextcloud_proxy" 2>/dev/null || true
+NGINX_PROXY_IP=""
+if NGINX_PROXY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' nginx_nextcloud_proxy 2>/dev/null) && [ -n "${NGINX_PROXY_IP}" ]; then
+  docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "${NGINX_PROXY_IP}" 2>/dev/null || true
+  echo "deploy.sh: trusted_proxies[0]=${NGINX_PROXY_IP} (nginx_nextcloud_proxy)"
+else
+  echo "deploy.sh: WARNING: could not read nginx_nextcloud_proxy IP; trusted_proxies not updated" >&2
+fi
 docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https" 2>/dev/null || true
+
+# trusted_domains: docker-compose NEXTCLOUD_TRUSTED_DOMAINS only runs on *first* install; it does
+# not update existing volumes. Browsers use Host like "<ip>:5002", which must be trusted. LAN/dev
+# wildcard matches specs/wbs/02-oidc-for-nextcloud.md.
+echo "deploy.sh: Setting trusted domains (LAN/dev)..."
+docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value="*" 2>/dev/null || true
 
 # 2. LAN remote servers (dev mode)
 echo "deploy.sh: Allowing local remote servers..."
@@ -211,7 +225,28 @@ ONLYOFFICE_URL="https://${KIN_OIDC_HOST}:5002/ds/"
 echo "deploy.sh: Configuring OnlyOffice DocumentServerUrl to ${ONLYOFFICE_URL}..."
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://onlyofficedocs/" 2>/dev/null || true
+# Document Server must load/save files and hit callbacks: use internal HTTP to the nextcloud *service* so
+# the DS container does not depend on self-signed https://<lan>:5002. verify_peer_off helps PHP→DS HTTPS.
+echo "deploy.sh: OnlyOffice StorageUrl (DS→Nextcloud) and verify_peer_off (dev/TLS)..."
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value="http://nextcloud/" 2>/dev/null || true
+docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value="true" 2>/dev/null || true
 docker exec --user www-data nextcloud php occ config:app:delete onlyoffice settings_error 2>/dev/null || true
+
+# DS container: accept self-signed certs when downloading files from Nextcloud via nginx
+echo "deploy.sh: Configuring Document Server to accept self-signed certificates..."
+docker exec onlyoffice python3 -c "
+import json, sys
+p = '/etc/onlyoffice/documentserver/local.json'
+with open(p) as f: c = json.load(f)
+rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaults',{})
+if rd.get('rejectUnauthorized') is not False:
+    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False)
+    with open(p,'w') as f: json.dump(c,f,indent=2)
+    print('  Updated local.json (rejectUnauthorized=false)')
+else:
+    print('  local.json already has rejectUnauthorized=false')
+" 2>/dev/null || true
+docker exec onlyoffice supervisorctl restart ds:docservice ds:converter 2>/dev/null || true
 
 echo "deploy.sh: OIDC configuration complete."
 echo ""

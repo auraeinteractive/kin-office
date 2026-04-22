@@ -519,6 +519,11 @@
             return;
         }
 
+        if (data.type === 'kinEditorKeydown') {
+            postToParent({ type: 'kinBridgeEditorKeydown' });
+            return;
+        }
+
         if (!data.type) return;
 
         var status = getStatus();
@@ -628,10 +633,7 @@
         log('URL changed to:', status.url);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage);
 
-        // Re-apply toolbar hiding for OnlyOffice
-        if (isOnlyOfficeContext()) {
-            ensureToolbarHidden();
-        }
+        ensureToolbarHidden();
 
         if (status.isLoggedIn) {
             postToParent({
@@ -653,15 +655,19 @@
 
     // --- Init ---
 
+    // BUG: Wrapping DocsAPI.DocEditor constructor to hook onDocumentStateChange
+    // does not work — the Nextcloud OnlyOffice app appears to create the editor
+    // before kin-bridge.js can intercept it, or uses a code path that bypasses
+    // the wrapped constructor. Instead, keydown events are injected directly into
+    // the OO editor iframe via nginx sub_filter, then forwarded here as
+    // kinEditorKeydown → kinBridgeEditorKeydown for debounced autosave.
+
     function init() {
         var status = getStatus();
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
 
-        // Hide toolbar for OnlyOffice iframe
-        if (isOnlyOfficeContext()) {
-            ensureToolbarHidden();
-        }
+        ensureToolbarHidden();
 
         // Intercept new window requests
         interceptNewWindowAttempts();
