@@ -283,9 +283,29 @@
         });
     }
 
-// --- Toolbar hiding (Always apply, for OnlyOffice context) ---
+// --- Toolbar hiding (Hide header for OnlyOffice editing, keep for kinnextcloud) ---
 
     function hideNextcloudToolbar() {
+        var path = window.location.pathname || '';
+        
+        // Keep header visible for kinnextcloud admin app URLs
+        // (kinnextcloud opens / or /index.php/apps/dashboard/, /settings/, etc.)
+        if (path === '/' || path.indexOf('/index.php/apps/dashboard') === 0 ||
+            path.indexOf('/index.php/settings/') === 0 || path.indexOf('/index.php/apps/user_') === 0) {
+            return;
+        }
+        
+        // Hide header for OnlyOffice editing URLs
+        if (path.indexOf('/index.php/apps/onlyoffice/') === 0) {
+            // Continue to hide header
+        } else {
+            // For any other URLs, check URL param
+            var urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('hideheader') !== '1') {
+                return;
+            }
+        }
+
         var style = document.createElement('style');
         style.id = 'kin-bridge-toolbar-hide';
         style.textContent = 

@@ -26,7 +26,7 @@
 
         var params = new URLSearchParams(window.location.search);
         var host = resolveNextcloudHost(params);
-        var nextcloudUrl = 'https://' + host + ':' + String(NEXTCLOUD_PORT);
+        var nextcloudUrl = 'https://' + host + ':' + NEXTCLOUD_PORT;
 
         iframeEl = document.createElement('iframe');
         iframeEl.id = 'iframe';
@@ -34,7 +34,7 @@
         iframeEl.src = nextcloudUrl;
         document.body.appendChild(iframeEl);
 
-        log('Opening Nextcloud at:', nextcloudUrl, '(OIDC login is automatic)');
+        log('Opening Nextcloud at:', nextcloudUrl, '(header visible by default)');
     }
 
     init();

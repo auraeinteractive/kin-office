@@ -248,6 +248,9 @@ else:
 " 2>/dev/null || true
 docker exec onlyoffice supervisorctl restart ds:docservice ds:converter 2>/dev/null || true
 
+echo "deploy.sh: Reloading nginx to pick up any kin-bridge.js changes..."
+docker exec nginx_nextcloud_proxy nginx -s reload 2>/dev/null || true
+
 echo "deploy.sh: OIDC configuration complete."
 echo ""
 echo "OnlyOffice Document Server is configured at ${ONLYOFFICE_URL}"
