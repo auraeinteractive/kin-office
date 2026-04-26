@@ -15,6 +15,7 @@
         var q = {};
         var openPath = qp( 'kin_open_path' ) || qp( 'path' );
         if( openPath ) q.kin_open_path = openPath;
+        q.onlyoffice_mode = qp( 'onlyoffice_mode' ) || qp( 'kin_onlyoffice_mode' ) || 'direct';
         new kin.classes.Window( {
             entry: 'app.js',
             packageId: pkg,
