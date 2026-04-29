@@ -7,9 +7,10 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/kin/modules/kin-office
-ExecStart=/bin/bash -c 'deploy.sh --deploy-mode 2>/dev/null || true; docker compose up -d --wait --timeout 180'
-ExecStop=/bin/bash -c 'cd /opt/kin/modules/kin-office && docker compose down'
-ExecReload=/bin/bash -c 'deploy.sh --deploy-mode 2>/dev/null || true; cd /opt/kin/modules/kin-office && docker compose up -d --wait --timeout 180'
+ExecStartPre=/usr/bin/test -f /opt/kin/modules/kin-office/docker-compose.yml
+ExecStart=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
+ExecStop=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml down
+ExecReload=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
 User=root
 Group=root
 
