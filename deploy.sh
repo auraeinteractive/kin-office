@@ -292,7 +292,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     # Start Docker containers with network-callable hostname
     cd "${ROOT}"
     export KIN_OIDC_HOST
-    docker compose up -d --wait --timeout 180 nextcloud onlyoffice
+    docker-compose up -d --timeout 180 nextcloud onlyoffice
 
     # Configure Nextcloud with the network-callable hostname
     echo "deploy.sh: Configuring Nextcloud for ${KIN_OIDC_HOST}..."

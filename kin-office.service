@@ -8,9 +8,9 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/kin/modules/kin-office
 ExecStartPre=/usr/bin/test -f /opt/kin/modules/kin-office/docker-compose.yml
-ExecStart=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
-ExecStop=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml down
-ExecReload=/usr/bin/docker compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
+ExecStart=/usr/bin/docker-compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
+ExecStop=/usr/bin/docker-compose -f /opt/kin/modules/kin-office/docker-compose.yml down
+ExecReload=/usr/bin/docker-compose -f /opt/kin/modules/kin-office/docker-compose.yml up -d --wait --timeout 180
 User=root
 Group=root
 
