@@ -1,9 +1,6 @@
 (function(global) {
     'use strict';
 
-    var LOOPBACK_HOSTS = { 'localhost': true, '127.0.0.1': true, '::1': true };
-    var NEXTCLOUD_PORT = 5002;
-
     var iframeEl = null;
 
     function log() {
@@ -11,10 +8,21 @@
         console.log.apply(console, args);
     }
 
-    function resolveNextcloudHost(params) {
-        var override = params.get('nextcloud_host') || params.get('nextcloudHost');
-        if (override) return override;
-        return window.location.hostname;
+    function trimTrailingSlash(value) {
+        return String(value || '').replace(/\/+$/, '');
+    }
+
+    function resolveNextcloudOrigin(params) {
+        var originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
+        if (originOverride) return trimTrailingSlash(originOverride);
+
+        var hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
+        if (hostOverride) {
+            var port = params.get('nextcloud_port') || params.get('nextcloudPort') || '5002';
+            return 'https://' + hostOverride + ':' + port;
+        }
+
+        return trimTrailingSlash(window.location.origin) + '/kin-office';
     }
 
     function init() {
@@ -25,8 +33,7 @@
         document.body.replaceChildren();
 
         var params = new URLSearchParams(window.location.search);
-        var host = resolveNextcloudHost(params);
-        var nextcloudUrl = 'https://' + host + ':' + NEXTCLOUD_PORT;
+        var nextcloudUrl = resolveNextcloudOrigin(params);
 
         iframeEl = document.createElement('iframe');
         iframeEl.id = 'iframe';

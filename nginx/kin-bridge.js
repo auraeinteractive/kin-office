@@ -15,6 +15,42 @@
         console.log.apply(console, args);
     }
 
+    function detectBasePath() {
+        var path = window.location.pathname || '';
+        if (path === '/kin-office' || path.indexOf('/kin-office/') === 0) {
+            return '/kin-office';
+        }
+        var script = document.currentScript;
+        var src = script && script.getAttribute ? (script.getAttribute('src') || '') : '';
+        var marker = '/kin-bridge';
+        var markerIndex = src.indexOf(marker);
+        if (markerIndex > 0) {
+            return src.slice(0, markerIndex);
+        }
+        return '';
+    }
+
+    var BASE_PATH = detectBasePath();
+
+    function withBasePath(path) {
+        var value = String(path || '');
+        if (!BASE_PATH || value.charAt(0) !== '/' || value === BASE_PATH || value.indexOf(BASE_PATH + '/') === 0) {
+            return value;
+        }
+        return BASE_PATH + value;
+    }
+
+    function stripBasePath(path) {
+        var value = String(path || '');
+        if (BASE_PATH && value.indexOf(BASE_PATH + '/') === 0) {
+            return value.slice(BASE_PATH.length) || '/';
+        }
+        if (BASE_PATH && value === BASE_PATH) {
+            return '/';
+        }
+        return value;
+    }
+
     function postToParent(msg) {
         if (window.parent && window.parent !== window) {
             window.parent.postMessage(msg, '*');
@@ -91,7 +127,7 @@
             inframe: false,
             url: window.location.href
         };
-        var pathMatch = String(window.location.pathname || '').match(/\/index\.php\/apps\/onlyoffice\/(\d+)/i);
+        var pathMatch = stripBasePath(window.location.pathname || '').match(/\/index\.php\/apps\/onlyoffice\/(\d+)/i);
         if (pathMatch && pathMatch[1]) {
             context.fileId = pathMatch[1];
             try {
@@ -176,7 +212,7 @@
             '/ds/coauthoring/CommandService.ashx',
             '/command',
             '/ds/command'
-        ];
+        ].map(withBasePath);
 
         function attempt(index, lastResult) {
             if (index >= endpoints.length) {
@@ -232,7 +268,7 @@
             return;
         }
 
-        var configUrl = '/ocs/v2.php/apps/onlyoffice/api/v1/config/' + encodeURIComponent(String(ctx.fileId));
+        var configUrl = withBasePath('/ocs/v2.php/apps/onlyoffice/api/v1/config/' + encodeURIComponent(String(ctx.fileId)));
         if (ctx.filePath) {
             configUrl += '?filePath=' + encodeURIComponent(String(ctx.filePath));
         }
@@ -286,7 +322,7 @@
 // --- Toolbar hiding (Hide header for OnlyOffice editing, keep for kinnextcloud) ---
 
     function hideNextcloudToolbar() {
-        var path = window.location.pathname || '';
+        var path = stripBasePath(window.location.pathname || '');
         
         // Keep header visible for kinnextcloud admin app URLs
         // (kinnextcloud opens / or /index.php/apps/dashboard/, /settings/, etc.)
@@ -385,20 +421,20 @@
 
         // If user_oidc is configured with allow_multiple_user_backends=0, /login auto-redirects to the IdP.
         // This keeps the user out of the Nextcloud login form entirely.
-        window.location.href = '/index.php/login';
+        window.location.href = withBasePath('/index.php/login');
     }
 
     // --- Logout ---
 
     function doLogout(data) {
         var token = getRequestToken();
-        var logoutUrl = '/index.php/logout';
+        var logoutUrl = withBasePath('/index.php/logout');
         if (token) {
             logoutUrl += '?requesttoken=' + encodeURIComponent(token);
         }
         // If switching to admin, go to login page with direct=1 after logout
         if (data && data.switchToAdmin) {
-            logoutUrl += '&redirect=/login%3Fdirect%3D1';
+            logoutUrl += (logoutUrl.indexOf('?') === -1 ? '?' : '&') + 'redirect=' + encodeURIComponent(withBasePath('/login?direct=1'));
         }
         window.location.href = logoutUrl;
     }
@@ -418,7 +454,7 @@
 
     function handleWebDAV(method, path, body, extraHeaders, responseType, source, requestId) {
         var user = getLoggedInUser() || 'unknown';
-        var url = path || '/remote.php/dav/files/' + user;
+        var url = withBasePath(path || '/remote.php/dav/files/' + user);
         var headers = {
             'Content-Type': 'application/xml',
             'Depth': '1'
@@ -483,7 +519,7 @@
     // --- OCS API (Nextcloud uses v2) ---
 
     function handleOCS(method, endpoint, data, source, requestId) {
-        var url = '/ocs/v2.php/' + endpoint;
+        var url = withBasePath('/ocs/v2.php/' + endpoint);
         var options = {
             method: method || 'GET',
             credentials: 'same-origin',
@@ -582,7 +618,7 @@
                 break;
 
             case 'kinBridgeNavigate':
-                if (data.path) window.location.href = data.path;
+                if (data.path) window.location.href = withBasePath(data.path);
                 break;
 
             case 'kinBridgeGetUser':

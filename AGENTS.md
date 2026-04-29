@@ -1,7 +1,7 @@
 # Project: Nextcloud - Self-Hosted Nextcloud with Kin Integration
 
 ## Goal
-Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `https://<host>:5002` using a self-signed certificate, with integration into Kin OS.
+Set up Nextcloud to run in Docker and expose it through Kin's nginx reverse proxy at `https://<host>:9219/kin-office/`, with integration into Kin OS.
 
 ## Important Operational Rules
 
@@ -13,7 +13,7 @@ Set up Nextcloud to run in Docker with an Nginx reverse proxy accessible at `htt
 - **OnlyOffice app** - The Nextcloud app itself is installed from Nextcloud's App Store (`/settings/apps`), not via docker or deploy.sh
 - **Keep docker-compose.yml and .config.ini in sync** - Changing NEXTCLOUD_ADMIN_PASSWORD in one requires changing in both, or Nextcloud will be stuck in retry loop on restart
 - **Recreate containers only, not volumes** - Use `docker compose rm -f <service>` followed by `docker compose up -d <service>`, never `docker compose down -v`
-- **After container changes, restart nginx** - Nginx proxy may need restart to reconnect: `docker compose restart nginx`
+- **After container changes, reload Kin nginx** - `deploy.sh` writes `../kin/build/nginx/server.d/kin-office.conf` and reloads Kin nginx when it is running
 - **When Nextcloud shows "Login is invalid because files already exist"** - The admin password in docker-compose.yml doesn't match existing data; either use the original password or accept that data may need re-setup
 - **kinnextcloud app (admin)** - Requires a fresh browser session (incognito/private window) to login as admin, because OIDC remembers the user session
 
@@ -30,17 +30,17 @@ Kin Workspace (Browser)
 kinnextcloud app (iframe) -- postMessage --> kin-bridge.js (injected)
     |                                               |
     v                                               v
-Nginx (Reverse Proxy) --- :5002 <---------------- Nextcloud
+Kin nginx (:9219/kin-office) <------------------- Nextcloud
          |
-         +-- /ds/ ---------------> OnlyOffice
+         +-- /kin-office/ds/ ----> OnlyOffice
 ```
 
 ## Components
 
 ### Docker Setup
-- `docker-compose.yml` - Nextcloud + Nginx + OnlyOffice services
-- `nginx/conf.d/nextcloud.conf` - Nginx config with header overrides for iframe embedding
-- `nginx/certs/` - Self-signed SSL certificate (shared with kinoffice)
+- `docker-compose.yml` - Nextcloud + legacy Nginx + OnlyOffice services; deploy starts Nextcloud and OnlyOffice for Kin nginx integration
+- `nginx/conf.d/nextcloud.conf` - Legacy standalone Nginx config with header overrides for iframe embedding
+- `nginx/certs/` - Legacy standalone Nginx self-signed certificate
 - `nginx/kin-bridge.js` - JavaScript bridge injected into Nextcloud pages
 
 ### Kin Apps
@@ -98,11 +98,11 @@ docker compose up -d --build
 
 All configuration is handled automatically by `deploy.sh`. On first run, it:
 
-1. Starts Nextcloud, OnlyOffice, and Nginx containers
+1. Starts Nextcloud and OnlyOffice containers
 2. Prompts for which Kin user should be Nextcloud admin
 3. Configures OIDC with Kin as the identity provider
 4. Adds the Kin admin user to Nextcloud's admin group
-5. Sets up proxy trust and HTTPS handling
+5. Writes the Kin nginx module and sets up proxy trust and HTTPS handling
 
 For manual overrides, the following can be set in `.config.ini`:
 
@@ -128,7 +128,7 @@ Access the kin repository in read only unless otherwise asked by the user.
 ## Files
 
 - `docker-compose.yml` - Service definitions
-- `nginx/conf.d/nextcloud.conf` - Nginx reverse proxy config
+- `nginx/conf.d/nextcloud.conf` - Legacy standalone Nginx reverse proxy config
 - `nginx/certs/localhost.crt` - SSL certificate
 - `nginx/certs/localhost.key` - SSL private key
 - `nginx/kin-bridge.js` - Nextcloud postMessage bridge
@@ -141,18 +141,18 @@ Access the kin repository in read only unless otherwise asked by the user.
 
 ## Integration Notes
 
-- Nginx overrides `X-Frame-Options` to `ALLOWALL` for iframe embedding
+- Kin nginx overrides `X-Frame-Options` to `ALLOWALL` for iframe embedding
 - CSP is relaxed to allow inline scripts and iframe embedding
-- kin-bridge.js is served at `/kin-bridge.js` and injected into Nextcloud pages
-- Nginx uses `server_name _` and forwards `$http_host` so requests work for LAN hostnames/IPs
-- OnlyOffice is proxied both as dedicated `:5003` and same-origin `https://<host>:5002/ds/`
-- Kin apps build iframe URLs dynamically from current browser hostname (no hardcoded `localhost`)
+- kin-bridge.js is served at `/kin-office/kin-bridge.js` and injected into Nextcloud pages
+- Kin nginx uses `server_name _` and forwards `$http_host` so requests work for LAN hostnames/IPs
+- OnlyOffice is proxied as same-origin `https://<host>:9219/kin-office/ds/`
+- Kin apps default to `window.location.origin + "/kin-office"` (no hardcoded `localhost`)
 - Optional override is supported with query param `nextcloud_host=<host>`
 - Optional storage volume override is supported with query param `kin_nextcloud_volume=<VolumeName>` (default `Nextcloud:`)
 - Optional file open override is supported with query param `kin_open_path=<KinPath>`
 - Optional assign target override is supported with query param `kin_nextcloud_assign_target=<KinPath>` (default `Home:.Mounts/nextcloud`)
 - File dialogs default to `Mountlist:` so users can choose `Home:`, `System:`, or assigned volumes
-- Since Nextcloud is same-origin (proxied), the kinnextcloud app can access iframe content
+- Since Nextcloud is same-origin through Kin nginx, the kinnextcloud app can access iframe content
 - Nextcloud uses OCS API v2 (`/ocs/v2.php/`) unlike OwnCloud's v1
 - After successful login, Nextcloud redirects to `/index.php/apps/dashboard/` (not files)
 - Office launchers expose Storage menu actions to connect/status/disconnect the `Nextcloud:` assign
@@ -183,7 +183,7 @@ assign Nextcloud: Home:.Mounts/nextcloud
 | Aspect | kinoffice (OwnCloud) | nextcloud |
 |--------|---------------------|-----------|
 | Docker image | `owncloud:latest` | `nextcloud:latest` |
-| Port | 5001 | 5002 |
+| Legacy standalone port | 5001 | 5002 |
 | Direct port | 8080 | 8081 |
 | Env vars | `OWNCLOUD_ADMIN_USERNAME` | `NEXTCLOUD_ADMIN_USER` |
 | Post-login redirect | `/index.php/apps/files/` | `/index.php/apps/dashboard/` |

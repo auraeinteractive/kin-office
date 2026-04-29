@@ -15,6 +15,42 @@
         console.log.apply(console, args);
     }
 
+    function detectBasePath() {
+        var path = window.location.pathname || '';
+        if (path === '/kin-office' || path.indexOf('/kin-office/') === 0) {
+            return '/kin-office';
+        }
+        var script = document.currentScript;
+        var src = script && script.getAttribute ? (script.getAttribute('src') || '') : '';
+        var marker = '/kin-bridge';
+        var markerIndex = src.indexOf(marker);
+        if (markerIndex > 0) {
+            return src.slice(0, markerIndex);
+        }
+        return '';
+    }
+
+    var BASE_PATH = detectBasePath();
+
+    function withBasePath(path) {
+        var value = String(path || '');
+        if (!BASE_PATH || value.charAt(0) !== '/' || value === BASE_PATH || value.indexOf(BASE_PATH + '/') === 0) {
+            return value;
+        }
+        return BASE_PATH + value;
+    }
+
+    function stripBasePath(path) {
+        var value = String(path || '');
+        if (BASE_PATH && value.indexOf(BASE_PATH + '/') === 0) {
+            return value.slice(BASE_PATH.length) || '/';
+        }
+        if (BASE_PATH && value === BASE_PATH) {
+            return '/';
+        }
+        return value;
+    }
+
     function postToParent(msg) {
         if (window.parent && window.parent !== window) {
             window.parent.postMessage(msg, '*');
@@ -91,7 +127,7 @@
             inframe: false,
             url: window.location.href
         };
-        var pathMatch = String(window.location.pathname || '').match(/\/index\.php\/apps\/onlyoffice\/(\d+)/i);
+        var pathMatch = stripBasePath(window.location.pathname || '').match(/\/index\.php\/apps\/onlyoffice\/(\d+)/i);
         if (pathMatch && pathMatch[1]) {
             context.fileId = pathMatch[1];
             try {
@@ -176,7 +212,7 @@
             '/ds/coauthoring/CommandService.ashx',
             '/command',
             '/ds/command'
-        ];
+        ].map(withBasePath);
 
         function attempt(index, lastResult) {
             if (index >= endpoints.length) {
@@ -232,7 +268,7 @@
             return;
         }
 
-        var configUrl = '/ocs/v2.php/apps/onlyoffice/api/v1/config/' + encodeURIComponent(String(ctx.fileId));
+        var configUrl = withBasePath('/ocs/v2.php/apps/onlyoffice/api/v1/config/' + encodeURIComponent(String(ctx.fileId)));
         if (ctx.filePath) {
             configUrl += '?filePath=' + encodeURIComponent(String(ctx.filePath));
         }
@@ -283,9 +319,29 @@
         });
     }
 
-// --- Toolbar hiding (Always apply, for OnlyOffice context) ---
+// --- Toolbar hiding (Hide header for OnlyOffice editing, keep for kinnextcloud) ---
 
     function hideNextcloudToolbar() {
+        var path = stripBasePath(window.location.pathname || '');
+        
+        // Keep header visible for kinnextcloud admin app URLs
+        // (kinnextcloud opens / or /index.php/apps/dashboard/, /settings/, etc.)
+        if (path === '/' || path.indexOf('/index.php/apps/dashboard') === 0 ||
+            path.indexOf('/index.php/settings/') === 0 || path.indexOf('/index.php/apps/user_') === 0) {
+            return;
+        }
+        
+        // Hide header for OnlyOffice editing URLs
+        if (path.indexOf('/index.php/apps/onlyoffice/') === 0) {
+            // Continue to hide header
+        } else {
+            // For any other URLs, check URL param
+            var urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('hideheader') !== '1') {
+                return;
+            }
+        }
+
         var style = document.createElement('style');
         style.id = 'kin-bridge-toolbar-hide';
         style.textContent = 
@@ -351,55 +407,34 @@
         }, true);
     }
 
-    // --- Admin login (direct form) ---
+    // --- Login via OIDC (silent) ---
 
-    var ADMIN_LOGIN = { username: 'admin', password: 'admin' };
-
-    function startAdminLogin() {
-        var token = getRequestToken();
-        var formData = new FormData();
-        formData.append('user', ADMIN_LOGIN.username);
-        formData.append('password', ADMIN_LOGIN.password);
-        if (token) {
-            formData.append('requesttoken', token);
-        }
-        formData.append('timezone-offset', String(new Date().getTimezoneOffset() / -60));
-        formData.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
-
-        fetch('/index.php/login', {
-            method: 'POST',
-            body: formData,
-            credentials: 'same-origin',
-            redirect: 'manual'
-        }).then(function(resp) {
-            if (resp.type === 'opaqueredirect' || resp.status === 303 || resp.status === 302 || resp.status === 0) {
-                log('Admin login succeeded');
-                window.location.href = '/index.php/apps/dashboard/';
-            } else {
-                log('Admin login failed:', resp.status);
-                postToParent({
-                    type: 'kinBridgeError',
-                    error: 'Admin login failed',
-                    action: 'login'
-                });
+    function startOidcLogin() {
+        try {
+            var u = new URL(window.location.href);
+            // Allow admins to force the local login form.
+            if (u.searchParams.get('direct') === '1') {
+                log('Login direct=1 requested; not starting OIDC');
+                return;
             }
-        }).catch(function(err) {
-            log('Admin login error:', err.message);
-            postToParent({
-                type: 'kinBridgeError',
-                error: err.message,
-                action: 'login'
-            });
-        });
+        } catch (_e) {}
+
+        // If user_oidc is configured with allow_multiple_user_backends=0, /login auto-redirects to the IdP.
+        // This keeps the user out of the Nextcloud login form entirely.
+        window.location.href = withBasePath('/index.php/login');
     }
 
     // --- Logout ---
 
     function doLogout(data) {
         var token = getRequestToken();
-        var logoutUrl = '/index.php/logout';
+        var logoutUrl = withBasePath('/index.php/logout');
         if (token) {
             logoutUrl += '?requesttoken=' + encodeURIComponent(token);
+        }
+        // If switching to admin, go to login page with direct=1 after logout
+        if (data && data.switchToAdmin) {
+            logoutUrl += (logoutUrl.indexOf('?') === -1 ? '?' : '&') + 'redirect=' + encodeURIComponent(withBasePath('/login?direct=1'));
         }
         window.location.href = logoutUrl;
     }
@@ -419,7 +454,7 @@
 
     function handleWebDAV(method, path, body, extraHeaders, responseType, source, requestId) {
         var user = getLoggedInUser() || 'unknown';
-        var url = path || '/remote.php/dav/files/' + user;
+        var url = withBasePath(path || '/remote.php/dav/files/' + user);
         var headers = {
             'Content-Type': 'application/xml',
             'Depth': '1'
@@ -484,7 +519,7 @@
     // --- OCS API (Nextcloud uses v2) ---
 
     function handleOCS(method, endpoint, data, source, requestId) {
-        var url = '/ocs/v2.php/' + endpoint;
+        var url = withBasePath('/ocs/v2.php/' + endpoint);
         var options = {
             method: method || 'GET',
             credentials: 'same-origin',
@@ -540,6 +575,11 @@
             return;
         }
 
+        if (data.type === 'kinEditorKeydown') {
+            postToParent({ type: 'kinBridgeEditorKeydown' });
+            return;
+        }
+
         if (!data.type) return;
 
         var status = getStatus();
@@ -578,7 +618,7 @@
                 break;
 
             case 'kinBridgeNavigate':
-                if (data.path) window.location.href = data.path;
+                if (data.path) window.location.href = withBasePath(data.path);
                 break;
 
             case 'kinBridgeGetUser':
@@ -649,10 +689,7 @@
         log('URL changed to:', status.url);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage);
 
-        // Re-apply toolbar hiding for OnlyOffice
-        if (isOnlyOfficeContext()) {
-            ensureToolbarHidden();
-        }
+        ensureToolbarHidden();
 
         if (status.isLoggedIn) {
             postToParent({
@@ -674,15 +711,19 @@
 
     // --- Init ---
 
+    // BUG: Wrapping DocsAPI.DocEditor constructor to hook onDocumentStateChange
+    // does not work — the Nextcloud OnlyOffice app appears to create the editor
+    // before kin-bridge.js can intercept it, or uses a code path that bypasses
+    // the wrapped constructor. Instead, keydown events are injected directly into
+    // the OO editor iframe via nginx sub_filter, then forwarded here as
+    // kinEditorKeydown → kinBridgeEditorKeydown for debounced autosave.
+
     function init() {
         var status = getStatus();
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
 
-        // Hide toolbar for OnlyOffice iframe
-        if (isOnlyOfficeContext()) {
-            ensureToolbarHidden();
-        }
+        ensureToolbarHidden();
 
         // Intercept new window requests
         interceptNewWindowAttempts();
@@ -708,10 +749,10 @@
             url: status.url
         });
 
-        // If Nextcloud shows a login form, start admin login immediately.
+        // If Nextcloud shows a login form, start OIDC immediately.
         if (status.isLoginPage) {
             setTimeout(function() {
-                startAdminLogin();
+                startOidcLogin();
             }, 250);
         }
 

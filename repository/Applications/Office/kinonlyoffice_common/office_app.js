@@ -1,9 +1,3 @@
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-
-function isLoopbackHost(host) {
-    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
-}
-
 function normalizeVolumeLabel(volume) {
     const value = String(volume || 'Nextcloud').trim();
     if (!value) return 'Nextcloud:';
@@ -125,12 +119,11 @@ export function bootstrapOnlyOfficeApp(config) {
 
     const ORIGIN = window.location.origin;
     const params = new URLSearchParams(window.location.search);
-    const nextcloudHost = resolveNextcloudHost(params);
+    const NEXTCLOUD_ORIGIN = resolveNextcloudOrigin(params);
     const nextcloudVolumeLabel = normalizeVolumeLabel(params.get('kin_nextcloud_volume') || params.get('nextcloud_volume') || 'Nextcloud');
     const nextcloudAssignTarget = String(params.get('kin_nextcloud_assign_target') || 'Home:.Mounts/nextcloud');
     const dialogInitialPath = 'Mountlist:';
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
-    const NEXTCLOUD_ORIGIN = 'https://' + nextcloudHost + ':5002';
     const modeParam = String(params.get('onlyoffice_mode') || params.get('kin_onlyoffice_mode') || '').toLowerCase();
     const directMode = modeParam === 'direct' || params.get('onlyoffice_direct') === '1' || params.get('kin_onlyoffice_direct') === '1';
     const directOrigin = String(params.get('onlyoffice_direct_origin') || params.get('kin_onlyoffice_direct_origin') || NEXTCLOUD_ORIGIN).replace(/\/+$/, '');
@@ -1679,10 +1672,20 @@ function getInstanceId() {
     }
 }
 
-function resolveNextcloudHost(params) {
-    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
-    if (override) {
-        return override;
+function trimTrailingSlash(value) {
+    return String(value || '').replace(/\/+$/, '');
+}
+
+function resolveNextcloudOrigin(params) {
+    const originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
+    if (originOverride) {
+        return trimTrailingSlash(originOverride);
+    }
+
+    const hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
+    if (hostOverride) {
+        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '5002';
+        return 'https://' + hostOverride + ':' + port;
     }
 
     try {
@@ -1691,9 +1694,5 @@ function resolveNextcloudHost(params) {
         // ignore storage failures
     }
 
-    if (!isLoopbackHost(window.location.hostname)) {
-        return window.location.hostname;
-    }
-
-    return window.location.hostname;
+    return trimTrailingSlash(window.location.origin) + '/kin-office';
 }

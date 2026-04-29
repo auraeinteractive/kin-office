@@ -13,16 +13,16 @@ Kin apps embed Nextcloud in an iframe and use `postMessage` through `nginx/kin-b
 ### Current stack wiring (from this repo)
 
 - **Nextcloud container**: `nextcloud` (`nextcloud:latest`) exposed on host `http://<host>:8081/` (plain HTTP, for debugging only).
-- **Reverse proxy (canonical access)**: `nginx_nextcloud_proxy` terminates TLS and serves Nextcloud at `https://<host>:5002/`.
-- **OnlyOffice**: `onlyoffice` proxied same-origin under `https://<host>:5002/ds/` and also separately at `https://<host>:5003/`.
-- **Bridge injection**: `nginx/conf.d/nextcloud.conf` uses `sub_filter` to inject `<script src="/kin-bridge.js"></script>` into HTML pages.
+- **Reverse proxy (canonical access)**: Kin nginx terminates TLS and serves Nextcloud at `https://<host>:9219/kin-office/` through `../kin/build/nginx/server.d/kin-office.conf`.
+- **OnlyOffice**: `onlyoffice` is proxied same-origin under `https://<host>:9219/kin-office/ds/` and remains separately exposed at `https://<host>:5003/` for direct debugging.
+- **Bridge injection**: the generated Kin nginx module uses `sub_filter` to inject `<script src="/kin-office/kin-bridge.js"></script>` into HTML pages.
 - **OIDC discovery default (container → host)**: Compose sets `KIN_OIDC_DISCOVERY_URI` default to `https://host.docker.internal:9219/.well-known/openid-configuration` and adds `extra_hosts: host.docker.internal:host-gateway` so Nextcloud can reach a Kin IdP running on the Docker host.
 
 **Primary integration surfaces (this repo)**
 
 | Area | Path / artifact |
 |------|-----------------|
-| Reverse proxy + headers | `nginx/conf.d/nextcloud.conf` |
+| Reverse proxy + headers | generated `../kin/build/nginx/server.d/kin-office.conf` |
 | Bridge (login, WebDAV, OCS) | `nginx/kin-bridge.js` |
 | Nextcloud iframe app | `repository/Applications/Internet/kinnextcloud/app.js` |
 | OnlyOffice launchers | `repository/Applications/Office/kinonlyoffice_common/office_app.js` |
@@ -34,7 +34,7 @@ Kin apps embed Nextcloud in an iframe and use `postMessage` through `nginx/kin-b
 ## Goals
 
 1. **Silent SSO from Kin**: With a valid Kin workspace session, opening Nextcloud from Kin should not require typing Nextcloud (or Kin) credentials in the common case.
-2. **Same-origin proxy**: Nginx on `:5002` (per `AGENTS.md`) keeps the iframe same-origin for bridge behavior; TLS and trusted-proxy settings must stay consistent with `user_oidc` and discovery fetches.
+2. **Same-origin proxy**: Kin nginx on `:9219` keeps the iframe same-origin under `/kin-office/` for bridge behavior; TLS and trusted-proxy settings must stay consistent with `user_oidc` and discovery fetches.
 3. **Operational runbook**: Clear steps for LAN, self-signed Kin TLS, and **non-localhost** discovery URLs from inside Docker (see Phase D).
 
 ---
@@ -88,13 +88,13 @@ Minimum fields to set for the Kin provider:
 
 Register the Nextcloud redirect URI at the Kin provider (or configure Kin to accept it). With the Nginx proxy, the canonical redirect base is:
 
-- `https://<host>:5002/index.php/apps/user_oidc/code/kin`
+- `https://<host>:9219/kin-office/index.php/apps/user_oidc/code/kin`
 
 The exact path segment after `/code/` is the provider identifier you configured (e.g. `kin`).
 
 #### B.3 Global settings (proxy, TLS, OIDC client hints)
 
-- [x] `trusted_proxies` includes `nginx_nextcloud_proxy` (example in this repo’s docs).
+- [x] `trusted_proxies` includes the Docker gateway used by host Kin nginx.
 - [x] `overwriteprotocol = https` where reverse proxy terminates TLS.
 - [x] Self-signed Kin: `user_oidc.httpclient.allowselfsigned = true` when required.
 - [x] Silent path: `user_oidc.prompt = none` (confirm for your Nextcloud / app version).
@@ -106,15 +106,17 @@ These commands assume your containers are named as in `docker-compose.yml`.
 - Proxy correctness (required for correct redirect URIs and secure cookies):
 
 ```bash
-docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "nginx_nextcloud_proxy"
+docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "<docker-gateway-ip>"
 docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https"
+docker exec --user www-data nextcloud php occ config:system:set overwritehost --value "<host>:9219"
+docker exec --user www-data nextcloud php occ config:system:set overwritewebroot --value "/kin-office"
+docker exec --user www-data nextcloud php occ config:system:set overwrite.cli.url --value "https://<host>:9219/kin-office"
 ```
 
 - Optional LAN/dev “any host” mode (matches the guidance in `AGENTS.md`):
 
 ```bash
 docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value "*"
-docker exec --user www-data nextcloud php occ config:system:delete overwritehost
 ```
 
 - If discovery fetch is blocked by “local access rules”, one operator option is:
@@ -128,7 +130,7 @@ Prefer fixing the discovery hostname (Phase D) over leaving this enabled broadly
 **Acceptance criteria**
 
 - [ ] From **inside** the `nextcloud` container, `curl` to the configured discovery URL returns **200** and valid JSON (no `LocalServerException` / “violates local access rules”).
-- [ ] Browser: `https://<nc-host>:5002/index.php/login` redirects through `user_oidc` to Kin authorize (not a broken discovery / 404 chain).
+- [ ] Browser: `https://<kin-host>:9219/kin-office/index.php/login` redirects through `user_oidc` to Kin authorize (not a broken discovery / 404 chain).
 
 **Container-side verification**
 
@@ -283,7 +285,7 @@ docker exec --user www-data nextcloud php occ user_oidc:provider kin --output=js
 #### 5) Verify redirect chain (no manual Nextcloud password)
 
 ```bash
-curl -k -I https://<nextcloud-host>:5002/index.php/login | head
+curl -k -I https://<kin-host>:9219/kin-office/index.php/login | head
 ```
 
 You should see a redirect to `/apps/user_oidc/login/<id>` and then a redirect to Kin `/oidc/authorize?...prompt=none`.
@@ -309,7 +311,7 @@ Then apply the proxy/trust settings from Phase B.3, install/enable `user_oidc` i
 
 ### Expected UX
 
-- Opening `https://<host>:5002/` inside Kin should land on the Nextcloud dashboard after a silent OIDC redirect.
+- Opening `https://<host>:9219/kin-office/` inside Kin should land on the Nextcloud dashboard after a silent OIDC redirect.
 - The `kin-bridge.js` behavior when not logged in is: navigate to `/index.php/login` and rely on `user_oidc` to redirect to the IdP; admins can bypass via `?direct=1`.
 
 ---
@@ -318,7 +320,7 @@ Then apply the proxy/trust settings from Phase B.3, install/enable `user_oidc` i
 
 **This repo**
 
-- `nginx/conf.d/nextcloud.conf` — proxy, iframe-related headers, OnlyOffice `/ds/` routing.
+- `deploy.sh` — writes `../kin/build/nginx/server.d/kin-office.conf` for proxy, iframe-related headers, and OnlyOffice `/kin-office/ds/` routing.
 - `nginx/kin-bridge.js` — `kinBridgeLogin`, navigation, WebDAV/OCS, OnlyOffice hooks.
 - Apps under `repository/Applications/` as listed in the table above.
 - `docker-compose.yml` — automation removed; see Operator runbook for OIDC setup via `occ`.

@@ -1,9 +1,3 @@
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-
-function isLoopbackHost(host) {
-    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
-}
-
 function getInstanceId() {
     try {
         const url = new URL(window.location.href);
@@ -13,15 +7,23 @@ function getInstanceId() {
     }
 }
 
-function resolveNextcloudHost(params) {
-    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
-    if (override) {
-        return override;
+function trimTrailingSlash(value) {
+    return String(value || '').replace(/\/+$/, '');
+}
+
+function resolveNextcloudOrigin(params) {
+    const originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
+    if (originOverride) {
+        return trimTrailingSlash(originOverride);
     }
-    if (!isLoopbackHost(window.location.hostname)) {
-        return window.location.hostname;
+
+    const hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
+    if (hostOverride) {
+        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '5002';
+        return 'https://' + hostOverride + ':' + port;
     }
-    return window.location.hostname;
+
+    return trimTrailingSlash(window.location.origin) + '/kin-office';
 }
 
 function setLoading(text) {
@@ -63,8 +65,7 @@ export function bootstrapNextcloudMail() {
     const ORIGIN = window.location.origin;
     const instanceId = getInstanceId();
     const params = new URLSearchParams(window.location.search);
-    const nextcloudHost = resolveNextcloudHost(params);
-    const NEXTCLOUD_ORIGIN = 'https://' + nextcloudHost + ':5002';
+    const NEXTCLOUD_ORIGIN = resolveNextcloudOrigin(params);
     const targetPath = '/apps/mail/';
 
     let loginInProgress = false;
