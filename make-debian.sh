@@ -13,9 +13,13 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
 	exit 1
 fi
 
-# Version from git or default
+# Version from git or default (must start with digit for deb format)
 VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo "1.0.0")"
 VERSION="${VERSION#v}"
+# Ensure version starts with digit (git hash doesn't work for deb)
+if [[ ! "$VERSION" =~ ^[0-9] ]]; then
+    VERSION="1.0.0~git${VERSION}"
+fi
 
 if command -v dpkg-architecture >/dev/null 2>&1; then
 	ARCH="$(dpkg-architecture -qDEB_HOST_ARCH)"
