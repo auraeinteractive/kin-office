@@ -106,7 +106,8 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Kin <packages@os-kin.com>
 Installed-Size: $SIZE
-Depends: docker-compose, nginx, kin (>= 2.0)
+Depends: docker.io | docker-ce, kin (>= 2.0)
+Recommends: fonts-maven-pro, nginx
 Recommends: fonts-maven-pro
 Description: Kin Office Module - Nextcloud with OnlyOffice integration
  Nextcloud with OnlyOffice DocumentServer integration for Kin OS.
