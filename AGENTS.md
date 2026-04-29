@@ -92,6 +92,16 @@ docker compose up -d --build
 
 # Build and install kinnextcloud app to Kin
 ./build-apps.sh
+
+# Build .deb package (installs to /opt/kin/modules/kin-office/)
+./make-debian.sh
+
+# Manage service (after installing .deb)
+sudo systemctl start|stop|restart|reload kin-office
+sudo service kin-office start|stop|restart|reload
+
+# Deploy mode: read hostname from /etc/kin/config.ini, use port 443
+./deploy.sh --deploy-mode
 ```
 
 ## Configuration
@@ -105,6 +115,8 @@ All configuration is handled automatically by `deploy.sh`. On first run, it:
 5. Writes the Kin nginx module and sets up proxy trust and HTTPS handling
 
 For manual overrides, the following can be set in `.config.ini`:
+
+**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`, uses port 443 (HTTPS). Designed for production .deb installs where Kin runs behind Nginx on standard HTTPS port. The `kin-office.service` systemd service runs deploy mode automatically on start/reload.
 
 ```ini
 KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
