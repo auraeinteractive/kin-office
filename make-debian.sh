@@ -79,6 +79,12 @@ chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
 if [ -f /etc/systemd/system/kin-office.service ]; then
     systemctl daemon-reload 2>/dev/null || true
     systemctl enable kin-office.service 2>/dev/null || true
+    # Run deploy mode if config exists, then start/reload service
+    if [ -f /opt/kin/modules/kin-office/deploy.sh ]; then
+        cd /opt/kin/modules/kin-office
+        /opt/kin/modules/kin-office/deploy.sh --deploy-mode 2>/dev/null || true
+    fi
+    systemctl restart kin-office.service 2>/dev/null || true
 fi
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
