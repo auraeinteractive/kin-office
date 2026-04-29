@@ -19,16 +19,11 @@ if [[ -f "$KIN_CONFIG_FILE" ]]; then
     fi
 fi
 
-# Use full path for docker compose (systemd may not have correct PATH)
-export PATH="/usr/bin:/usr/local/bin:$PATH"
-DOCKER_COMPOSE="docker compose"
+# Use absolute path for docker compose v2 (systemd has limited PATH)
+DOCKER_COMPOSE="/usr/bin/docker compose"
 if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
-    # Try with full path
-    DOCKER_COMPOSE="/usr/bin/docker compose"
-    if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
-        echo "ERROR: 'docker compose' (v2) not found. Install docker.io >= 20.10"
-        exit 1
-    fi
+    echo "ERROR: 'docker compose' (v2) not found at $DOCKER_COMPOSE"
+    exit 1
 fi
 
 # Run deploy mode first
