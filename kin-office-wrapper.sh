@@ -9,6 +9,16 @@ COMPOSE_FILE="$KIN_OFFICE_DIR/docker-compose.yml"
 
 cd "$KIN_OFFICE_DIR" || { echo "ERROR: Cannot cd to $KIN_OFFICE_DIR"; exit 1; }
 
+# Read hostname from /etc/kin/config.ini for deploy mode
+KIN_CONFIG_FILE="/etc/kin/config.ini"
+if [[ -f "$KIN_CONFIG_FILE" ]]; then
+    KIN_OIDC_HOST=$(grep -E "^\s*hostname\s*=" "$KIN_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*//' | tr -d ' ')
+    if [[ -n "$KIN_OIDC_HOST" ]]; then
+        echo "Using hostname from $KIN_CONFIG_FILE: $KIN_OIDC_HOST"
+        export KIN_OIDC_HOST
+    fi
+fi
+
 # Use full path for docker compose (systemd may not have correct PATH)
 export PATH="/usr/bin:/usr/local/bin:$PATH"
 DOCKER_COMPOSE="docker compose"
