@@ -9,13 +9,13 @@ COMPOSE_FILE="$KIN_OFFICE_DIR/docker-compose.yml"
 
 cd "$KIN_OFFICE_DIR" || { echo "ERROR: Cannot cd to $KIN_OFFICE_DIR"; exit 1; }
 
-# Detect docker compose command (v2 plugin vs v1 standalone)
-if docker compose version >/dev/null 2>&1; then
-    DOCKER_COMPOSE="docker compose"
-elif command -v docker-compose >/dev/null 2>&1; then
+# Detect docker compose command (prefer v1 standalone with distutils)
+if command -v docker-compose >/dev/null 2>&1; then
     DOCKER_COMPOSE="docker-compose"
+elif docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
 else
-    echo "ERROR: Neither 'docker compose' nor 'docker-compose' found"
+    echo "ERROR: Neither 'docker-compose' nor 'docker compose' found"
     exit 1
 fi
 
