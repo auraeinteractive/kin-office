@@ -1,0 +1,17 @@
+[Unit]
+Description=Kin Office Module - Nextcloud with OnlyOffice
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/kin/modules/kin-office
+ExecStart=/bin/bash -c 'deploy.sh --deploy-mode 2>/dev/null || true; docker compose up -d --wait --timeout 180'
+ExecStop=/usr/bin/docker compose down
+ExecReload=/bin/bash -c 'deploy.sh --deploy-mode 2>/dev/null || true; docker compose up -d --wait --timeout 180'
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

@@ -59,6 +59,12 @@ if [[ -f "$ROOT/.env.example" ]]; then
 	cp "$ROOT/.env.example" "$MODULE_DIR/config.example"
 fi
 
+# Copy systemd service file
+if [[ -f "$ROOT/kin-office.service" ]]; then
+	mkdir -p "$STAGE/etc/systemd/system"
+	cp "$ROOT/kin-office.service" "$STAGE/etc/systemd/system/"
+fi
+
 # Create /opt/kin/modules/ directory in postinst
 mkdir -p "$STAGE/DEBIAN"
 
@@ -69,8 +75,24 @@ mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
+# Reload systemd and enable service
+if [ -f /etc/systemd/system/kin-office.service ]; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable kin-office.service 2>/dev/null || true
+fi
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
+
+cat >"$STAGE/DEBIAN/prerm" <<'PRERM'
+#!/bin/bash
+set -e
+# Stop and disable service before removal
+if [ -f /etc/systemd/system/kin-office.service ]; then
+    systemctl stop kin-office.service 2>/dev/null || true
+    systemctl disable kin-office.service 2>/dev/null || true
+fi
+PRERM
+chmod 755 "$STAGE/DEBIAN/prerm"
 
 # Control file
 SIZE="$(du -sk "$MODULE_DIR" 2>/dev/null | cut -f1)"
