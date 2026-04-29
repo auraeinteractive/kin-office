@@ -9,23 +9,13 @@ COMPOSE_FILE="$KIN_OFFICE_DIR/docker-compose.yml"
 
 cd "$KIN_OFFICE_DIR" || { echo "ERROR: Cannot cd to $KIN_OFFICE_DIR"; exit 1; }
 
-# Detect docker compose command (try v1 first, fall back to v2)
-if command -v docker-compose >/dev/null 2>&1; then
-    # Test if docker-compose actually works (might lack distutils)
-    if docker-compose version >/dev/null 2>&1; then
-        DOCKER_COMPOSE="docker-compose"
-    elif docker compose version >/dev/null 2>&1; then
-        DOCKER_COMPOSE="docker compose"
-    else
-        echo "ERROR: docker-compose found but not working, and docker compose not available"
-        exit 1
-    fi
-elif docker compose version >/dev/null 2>&1; then
-    DOCKER_COMPOSE="docker compose"
-else
-    echo "ERROR: Neither 'docker-compose' nor 'docker compose' found"
+# Use docker compose v2 (Go plugin) - works reliably
+# docker-compose v1 (Python) has distutils issues on newer Ubuntu
+if ! docker compose version >/dev/null 2>&1; then
+    echo "ERROR: 'docker compose' (v2) not found. Install docker.io >= 20.10"
     exit 1
 fi
+DOCKER_COMPOSE="docker compose"
 
 # Run deploy mode first
 if [[ -f "deploy.sh" ]]; then
