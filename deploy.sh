@@ -297,7 +297,16 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     # Start Docker containers with network-callable hostname
     cd "${ROOT}"
     export KIN_OIDC_HOST
-    docker compose up -d --wait --timeout 180 nextcloud onlyoffice
+    # Detect docker compose command
+    if docker compose version >/dev/null 2>&1; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        echo "deploy.sh: ERROR: docker compose not found" >&2
+        exit 1
+    fi
+    $DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
 
     # Configure Nextcloud with the network-callable hostname (port 443)
     echo "deploy.sh: Configuring Nextcloud for ${KIN_OIDC_HOST}..."
