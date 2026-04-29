@@ -19,10 +19,11 @@ if [[ -f "$KIN_CONFIG_FILE" ]]; then
     fi
 fi
 
-# Use absolute path for docker compose v2 (systemd has limited PATH)
-DOCKER_COMPOSE="/usr/bin/docker compose"
+# Use absolute path for docker-compose (v1 Python or v2 compatibility)
+# On this system, /usr/bin/docker-compose works (may be v1 or v2)
+DOCKER_COMPOSE="/usr/bin/docker-compose"
 if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
-    echo "ERROR: 'docker compose' (v2) not found at $DOCKER_COMPOSE"
+    echo "ERROR: 'docker-compose' not found at $DOCKER_COMPOSE"
     exit 1
 fi
 
