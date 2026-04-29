@@ -73,9 +73,13 @@ if [[ -f "$ROOT/.env.example" ]]; then
 	cp "$ROOT/.env.example" "$MODULE_DIR/config.example"
 fi
 
-# Copy systemd service file
+# Copy systemd service file and wrapper
 mkdir -p "$STAGE/lib/systemd/system"
 cp "$ROOT/kin-office.service" "$STAGE/lib/systemd/system/"
+if [[ -f "$ROOT/kin-office-wrapper.sh" ]]; then
+    cp "$ROOT/kin-office-wrapper.sh" "$MODULE_DIR/"
+    chmod 755 "$MODULE_DIR/kin-office-wrapper.sh"
+fi
 
 # Create /opt/kin/modules/ directory in postinst
 mkdir -p "$STAGE/DEBIAN"
