@@ -18,7 +18,7 @@
 
         var hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
         if (hostOverride) {
-            var port = params.get('nextcloud_port') || params.get('nextcloudPort') || '5002';
+            var port = params.get('nextcloud_port') || params.get('nextcloudPort') || '443';
             return 'https://' + hostOverride + ':' + port;
         }
 

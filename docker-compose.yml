@@ -34,23 +34,24 @@ services:
         aliases:
           - onlyofficedocs
 
-  nginx:
-    image: nginx:latest
-    container_name: nginx_nextcloud_proxy
-    restart: unless-stopped
-    ports:
-      - "5002:443"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
-      - ./nginx/kin-bridge.js:/etc/nginx/kin-bridge.js:ro
-    depends_on:
-      - nextcloud
-      - onlyoffice
-    networks:
-      nextcloud_network:
-        aliases:
-          - katana-arphicia
+  # Legacy nginx proxy removed - now using Kin's nginx on port 443
+  # nginx:
+  #   image: nginx:latest
+  #   container_name: nginx_nextcloud_proxy
+  #   restart: unless-stopped
+  #   ports:
+  #     - "5002:443"
+  #   volumes:
+  #     - ./nginx/conf.d:/etc/nginx/conf.d:ro
+  #     - ./nginx/certs:/etc/nginx/certs:ro
+  #     - ./nginx/kin-bridge.js:/etc/nginx/kin-bridge.js:ro
+  #   depends_on:
+  #     - nextcloud
+  #     - onlyoffice
+  #   networks:
+  #     nextcloud_network:
+  #       aliases:
+  #         - katana-arphicia
 
 networks:
   nextcloud_network:

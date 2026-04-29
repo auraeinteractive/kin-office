@@ -19,7 +19,7 @@ function resolveNextcloudOrigin(params) {
 
     const hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
     if (hostOverride) {
-        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '5002';
+        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '443';
         return 'https://' + hostOverride + ':' + port;
     }
 
