@@ -13,12 +13,22 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
 	exit 1
 fi
 
-# Version from git or default (must start with digit for deb format)
-VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo "1.0.0")"
-VERSION="${VERSION#v}"
-# Ensure version starts with digit (git hash doesn't work for deb)
-if [[ ! "$VERSION" =~ ^[0-9] ]]; then
-    VERSION="1.0.0~git${VERSION}"
+# Version: read from debian/changelog and increment build number
+if [[ -f "$ROOT/debian/changelog" ]]; then
+    CURRENT="$(head -1 "$ROOT/debian/changelog" | sed -n 's/.*(\([^)]*\)).*/\1/p')"
+    # Remove debian revision (e.g., 1.0.0-1 -> 1.0.0)
+    BASE="${CURRENT%-*}"
+    # Extract major.minor and build number (e.g., 1.0.0 -> major.minor=1.0, build=0)
+    if [[ "$BASE" =~ ^([0-9]+\.[0-9]+)\.([0-9]+)$ ]]; then
+        MAJOR_MINOR="${BASH_REMATCH[1]}"
+        BUILD="${BASH_REMATCH[2]}"
+        BUILD=$((BUILD + 1))
+        VERSION="${MAJOR_MINOR}.${BUILD}"
+    else
+        VERSION="1.0.1"
+    fi
+else
+    VERSION="1.0.1"
 fi
 
 if command -v dpkg-architecture >/dev/null 2>&1; then
