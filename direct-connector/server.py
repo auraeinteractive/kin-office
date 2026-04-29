@@ -194,7 +194,10 @@ def public_base(handler):
         return PUBLIC_BASE_URL
     proto = handler.headers.get("X-Forwarded-Proto") or "https"
     host = handler.headers.get("X-Forwarded-Host") or handler.headers.get("Host") or "localhost"
-    return f"{proto}://{host}/direct"
+    prefix = (handler.headers.get("X-Forwarded-Prefix") or "").strip().rstrip("/")
+    if prefix and not prefix.startswith("/"):
+        prefix = "/" + prefix
+    return f"{proto}://{host}{prefix}/direct"
 
 
 def session_public_urls(handler, session):

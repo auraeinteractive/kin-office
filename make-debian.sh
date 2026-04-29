@@ -53,12 +53,21 @@ mkdir -p "$MODULE_DIR"
 
 # Copy all needed files
 cp -a "$ROOT/docker-compose.yml" "$MODULE_DIR/"
+if [[ -f "$ROOT/docker-compose.direct.yml" ]]; then
+	cp -a "$ROOT/docker-compose.direct.yml" "$MODULE_DIR/"
+fi
 cp -a "$ROOT/deploy.sh" "$MODULE_DIR/"
 cp -a "$ROOT/build-apps.sh" "$MODULE_DIR/"
 chmod 755 "$MODULE_DIR/deploy.sh" "$MODULE_DIR/build-apps.sh"
 
 # Copy nginx/ directory
 cp -a "$ROOT/nginx" "$MODULE_DIR/"
+
+# Copy direct connector used by direct OnlyOffice launchers
+if [[ -d "$ROOT/direct-connector" ]]; then
+	cp -a "$ROOT/direct-connector" "$MODULE_DIR/"
+	rm -rf "$MODULE_DIR/direct-connector/__pycache__"
+fi
 
 # Copy repository/ (Kin apps)
 cp -a "$ROOT/repository" "$MODULE_DIR/"
