@@ -288,8 +288,26 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     export KIN_OIDC_HOST
     export KIN_PUBLIC_BASE_URL
     export KIN_OFFICE_PUBLIC_URL
-    # In deploy mode, write to system nginx sites-available (production)
-    # Falls back to /opt/kin/nginx/server.d/ if system nginx not available
+
+    # Start Docker containers with network-callable hostname
+    cd "${ROOT}"
+    export KIN_OIDC_HOST
+    docker compose up -d --wait --timeout 180 nextcloud onlyoffice
+
+    # Configure Nextcloud with the network-callable hostname
+    echo "deploy.sh: Configuring Nextcloud for ${KIN_OIDC_HOST}..."
+    docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "0.0.0.0/0" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set overwritehost --value "${KIN_OIDC_HOST}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set overwritewebroot --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set overwrite.cli.url --value "${KIN_OFFICE_PUBLIC_URL}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value="*" 2>/dev/null || true
+
+    # Configure OnlyOffice DocumentServer URL
+    ONLYOFFICE_URL="${KIN_OFFICE_PUBLIC_URL}/ds/"
+    docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
+
+    # Write nginx config
     if [[ -d "/etc/nginx/sites-available" ]]; then
         write_kin_nginx_site "${KIN_OFFICE_PREFIX}"
     else
