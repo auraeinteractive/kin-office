@@ -185,6 +185,30 @@ EOF
   fi
 }
 
+# Deploy mode: read hostname from /etc/kin/config.ini, expect Kin on port 443
+if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
+    KIN_CONFIG_FILE="/etc/kin/config.ini"
+    if [[ ! -f "${KIN_CONFIG_FILE}" ]]; then
+        echo "deploy.sh: ERROR: Deploy mode requires ${KIN_CONFIG_FILE}" >&2
+        exit 1
+    fi
+    KIN_OIDC_HOST=$(grep -E "^\s*hostname\s*=" "${KIN_CONFIG_FILE}" 2>/dev/null | head -1 | sed 's/.*=\s*//' | tr -d ' ')
+    if [[ -z "${KIN_OIDC_HOST}" ]]; then
+        echo "deploy.sh: ERROR: [KinCore] hostname= not set in ${KIN_CONFIG_FILE}" >&2
+        exit 1
+    fi
+    echo "deploy.sh: Deploy mode: using hostname=${KIN_OIDC_HOST} (port 443)"
+    KIN_PUBLIC_BASE_URL="https://${KIN_OIDC_HOST}"
+    KIN_OFFICE_PUBLIC_URL="${KIN_PUBLIC_BASE_URL}${KIN_OFFICE_PREFIX}"
+    export KIN_OIDC_HOST
+    export KIN_PUBLIC_BASE_URL
+    export KIN_OFFICE_PUBLIC_URL
+    # In deploy mode, KIN_BUILD_PATH defaults to /opt/kin/ (production root)
+    write_kin_nginx_module "${KIN_BUILD_PATH:-/opt/kin}" "${KIN_OFFICE_PREFIX}"
+    echo "deploy.sh: Deploy mode: nginx module written for ${KIN_OFFICE_PUBLIC_URL}"
+    exit 0
+fi
+
 if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "deploy.sh: ${CONFIG_FILE} not found." >&2
   echo "deploy.sh: create it (see .env.example for hints) and set at least:" >&2
