@@ -9,13 +9,17 @@ COMPOSE_FILE="$KIN_OFFICE_DIR/docker-compose.yml"
 
 cd "$KIN_OFFICE_DIR" || { echo "ERROR: Cannot cd to $KIN_OFFICE_DIR"; exit 1; }
 
-# Use docker compose v2 (Go plugin) - works reliably
-# docker-compose v1 (Python) has distutils issues on newer Ubuntu
-if ! docker compose version >/dev/null 2>&1; then
-    echo "ERROR: 'docker compose' (v2) not found. Install docker.io >= 20.10"
-    exit 1
-fi
+# Use full path for docker compose (systemd may not have correct PATH)
+export PATH="/usr/bin:/usr/local/bin:$PATH"
 DOCKER_COMPOSE="docker compose"
+if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
+    # Try with full path
+    DOCKER_COMPOSE="/usr/bin/docker compose"
+    if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
+        echo "ERROR: 'docker compose' (v2) not found. Install docker.io >= 20.10"
+        exit 1
+    fi
+fi
 
 # Run deploy mode first
 if [[ -f "deploy.sh" ]]; then
