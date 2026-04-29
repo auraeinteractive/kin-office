@@ -1,6 +1,6 @@
 #!/bin/bash
 # Wrapper script for kin-office service
-# Handles docker-compose with proper error handling
+# Handles docker compose with proper error handling
 
 set -e
 
@@ -16,6 +16,6 @@ fi
 
 # Start docker containers
 echo "Starting kin-office containers..."
-/usr/bin/docker-compose -f "$KIN_OFFICE_DIR/docker-compose.yml" up -d --wait --timeout 180
+docker compose -f "$KIN_OFFICE_DIR/docker-compose.yml" up -d --wait --timeout 180
 
 echo "kin-office started successfully"
