@@ -104,8 +104,13 @@ write_kin_nginx_module() {
   local kin_root
   local kin_nginx_dir
   local kin_nginx_conf
+  # In deploy mode, bridge.js is in /opt/kin/modules/kin-office/nginx/
   local bridge_js="${ROOT}/nginx/kin-bridge.js"
   local bridge_admin_js="${ROOT}/nginx/kin-bridge-admin.js"
+  if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
+    bridge_js="/opt/kin/modules/kin-office/nginx/kin-bridge.js"
+    bridge_admin_js="/opt/kin/modules/kin-office/nginx/kin-bridge-admin.js"
+  fi
 
   kin_root="$(cd "${kin_build_path}/.." && pwd)"
   kin_nginx_dir="${kin_root}/nginx"
@@ -294,7 +299,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     export KIN_OIDC_HOST
     docker-compose up -d --timeout 180 nextcloud onlyoffice
 
-    # Configure Nextcloud with the network-callable hostname
+    # Configure Nextcloud with the network-callable hostname (port 443)
     echo "deploy.sh: Configuring Nextcloud for ${KIN_OIDC_HOST}..."
     docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "0.0.0.0/0" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set overwriteprotocol --value "https" 2>/dev/null || true
@@ -303,17 +308,16 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     docker exec --user www-data nextcloud php occ config:system:set overwrite.cli.url --value "${KIN_OFFICE_PUBLIC_URL}" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value="*" 2>/dev/null || true
 
-    # Configure OnlyOffice DocumentServer URL
+    # Configure OnlyOffice DocumentServer URL (through Kin nginx on port 443)
     ONLYOFFICE_URL="${KIN_OFFICE_PUBLIC_URL}/ds/"
     docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
 
-    # Write nginx config
-    if [[ -d "/etc/nginx/sites-available" ]]; then
-        write_kin_nginx_site "${KIN_OFFICE_PREFIX}"
-    else
-        write_kin_nginx_module "${KIN_BUILD_PATH:-/opt/kin}" "${KIN_OFFICE_PREFIX}"
-    fi
+    # Write nginx config to Kin's module directory for port 443
+    # KIN_BUILD_PATH should point to /opt/kin in production
+    write_kin_nginx_module "${KIN_BUILD_PATH:-/opt/kin}" "${KIN_OFFICE_PREFIX}"
+    
     echo "deploy.sh: Deploy mode: nginx config written for ${KIN_OFFICE_PUBLIC_URL}"
+    echo "deploy.sh: Access Nextcloud at ${KIN_OFFICE_PUBLIC_URL}/"
     exit 0
 fi
 
