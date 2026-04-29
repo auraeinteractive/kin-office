@@ -60,10 +60,8 @@ if [[ -f "$ROOT/.env.example" ]]; then
 fi
 
 # Copy systemd service file
-if [[ -f "$ROOT/kin-office.service" ]]; then
-	mkdir -p "$STAGE/etc/systemd/system"
-	cp "$ROOT/kin-office.service" "$STAGE/etc/systemd/system/"
-fi
+mkdir -p "$STAGE/lib/systemd/system"
+cp "$ROOT/kin-office.service" "$STAGE/lib/systemd/system/"
 
 # Create /opt/kin/modules/ directory in postinst
 mkdir -p "$STAGE/DEBIAN"
@@ -75,17 +73,18 @@ mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
-# Reload systemd and enable service
-if [ -f /etc/systemd/system/kin-office.service ]; then
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable kin-office.service 2>/dev/null || true
-    # Run deploy mode if config exists, then start/reload service
-    if [ -f /opt/kin/modules/kin-office/deploy.sh ]; then
-        cd /opt/kin/modules/kin-office
-        /opt/kin/modules/kin-office/deploy.sh --deploy-mode 2>/dev/null || true
-    fi
-    systemctl restart kin-office.service 2>/dev/null || true
+# Copy service file to correct location and reload systemd
+if [ -f /lib/systemd/system/kin-office.service ]; then
+    cp /lib/systemd/system/kin-office.service /etc/systemd/system/kin-office.service 2>/dev/null || true
 fi
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable kin-office.service 2>/dev/null || true
+# Run deploy mode if config exists, then start service
+if [ -f /opt/kin/modules/kin-office/deploy.sh ]; then
+    cd /opt/kin/modules/kin-office
+    /opt/kin/modules/kin-office/deploy.sh --deploy-mode 2>/dev/null || true
+fi
+systemctl restart kin-office.service 2>/dev/null || true
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
 
