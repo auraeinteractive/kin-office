@@ -19,13 +19,13 @@ if [[ -f "$KIN_CONFIG_FILE" ]]; then
     fi
 fi
 
-# Use absolute path for docker-compose (v1 Python or v2 compatibility)
-# On this system, /usr/bin/docker-compose works (may be v1 or v2)
-DOCKER_COMPOSE="/usr/bin/docker-compose"
-if ! $DOCKER_COMPOSE version >/dev/null 2>&1; then
-    echo "ERROR: 'docker-compose' not found at $DOCKER_COMPOSE"
+# Use docker compose v2 (plugin) - the official/recommended way
+if ! docker compose version >/dev/null 2>&1; then
+    echo "ERROR: 'docker compose' (v2) not found. Install docker compose plugin."
     exit 1
 fi
+DOCKER_COMPOSE="docker compose"
+echo "Using: $DOCKER_COMPOSE"
 
 # Run deploy mode first
 if [[ -f "deploy.sh" ]]; then
@@ -33,8 +33,12 @@ if [[ -f "deploy.sh" ]]; then
     bash deploy.sh --deploy-mode 2>/dev/null || true
 fi
 
+# Pull images first (shows download progress; first run downloads ~5GB)
+echo "Checking/pulling container images (first run may take several minutes)..."
+$DOCKER_COMPOSE -f "$COMPOSE_FILE" pull 2>&1
+
 # Start docker containers
-echo "Starting kin-office containers using: $DOCKER_COMPOSE"
+echo "Starting kin-office containers..."
 $DOCKER_COMPOSE -f "$COMPOSE_FILE" up -d --wait --timeout 180
 
 echo "kin-office started successfully"

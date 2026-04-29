@@ -415,7 +415,7 @@ if [[ -n "${KIN_OIDC_CONFIG}" ]]; then
 fi
 
 cd "${ROOT}"
-docker compose up -d --wait --timeout 180 nextcloud onlyoffice
+$DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
 
 # Enable .htaccess processing (AllowOverride) for Nextcloud routing
 echo "deploy.sh: Enabling .htaccess processing..."

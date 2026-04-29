@@ -91,18 +91,18 @@ mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
+# Install Kin apps into the runtime repository used by deployed Kin.
+if [ -d /opt/kin/modules/kin-office/repository/Applications ]; then
+    mkdir -p /usr/lib/kin/repository/Applications
+    cp -a /opt/kin/modules/kin-office/repository/Applications/. /usr/lib/kin/repository/Applications/
+fi
 # Copy service file to correct location and reload systemd
 if [ -f /lib/systemd/system/kin-office.service ]; then
     cp /lib/systemd/system/kin-office.service /etc/systemd/system/kin-office.service 2>/dev/null || true
 fi
 systemctl daemon-reload 2>/dev/null || true
 systemctl enable kin-office.service 2>/dev/null || true
-# Run deploy mode if config exists, then start service
-if [ -f /opt/kin/modules/kin-office/deploy.sh ]; then
-    cd /opt/kin/modules/kin-office
-    /opt/kin/modules/kin-office/deploy.sh --deploy-mode 2>/dev/null || true
-fi
-systemctl restart kin-office.service 2>/dev/null || true
+# Do NOT run deploy or start service here - wrapper handles it on service start
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
 
