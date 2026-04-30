@@ -33,18 +33,18 @@ if [[ -f "$COMPOSE_DIRECT_FILE" ]]; then
     COMPOSE_ARGS+=(-f "$COMPOSE_DIRECT_FILE")
 fi
 
-# Run deploy mode first
-if [[ -f "deploy.sh" ]]; then
-    echo "Running deploy.sh --deploy-mode..."
-    bash deploy.sh --deploy-mode
-fi
-
 # Pull images first (shows download progress; first run downloads ~5GB)
 echo "Checking/pulling container images (first run may take several minutes)..."
 $DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" pull nextcloud onlyoffice 2>&1
 
-# Start docker containers
-echo "Starting kin-office containers..."
-$DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180
+# deploy.sh --deploy-mode starts containers and applies runtime config after
+# images are current, so do not run compose up again afterwards.
+if [[ -f "deploy.sh" ]]; then
+    echo "Running deploy.sh --deploy-mode..."
+    bash deploy.sh --deploy-mode
+else
+    echo "Starting kin-office containers..."
+    $DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180
+fi
 
 echo "kin-office started successfully"

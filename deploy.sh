@@ -96,6 +96,68 @@ resolve_kin_build_path() {
   (cd "${configured}" 2>/dev/null && pwd) || return 1
 }
 
+wait_for_onlyoffice_api() {
+  local url="${1:-http://127.0.0.1:5003/web-apps/apps/api/documents/api.js}"
+  local timeout_seconds="${2:-240}"
+  local start now
+  start="$(date +%s)"
+
+  echo "deploy.sh: Waiting for OnlyOffice API at ${url}..."
+  while true; do
+    if command -v python3 >/dev/null 2>&1; then
+      if python3 - "${url}" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+
+url = sys.argv[1]
+request = urllib.request.Request(url, headers={"User-Agent": "kin-office-deploy/1.0"})
+with urllib.request.urlopen(request, timeout=5) as response:
+    body = response.read(8192)
+    if response.status < 500 and b"DocsAPI" in body:
+        sys.exit(0)
+sys.exit(1)
+PY
+      then
+        echo "deploy.sh: OnlyOffice API is ready"
+        return 0
+      fi
+    elif command -v curl >/dev/null 2>&1; then
+      if curl -fsS --max-time 5 "${url}" 2>/dev/null | grep -q "DocsAPI"; then
+        echo "deploy.sh: OnlyOffice API is ready"
+        return 0
+      fi
+    else
+      echo "deploy.sh: WARNING: neither python3 nor curl found; cannot check OnlyOffice API readiness" >&2
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_seconds )); then
+      echo "deploy.sh: ERROR: OnlyOffice API did not become ready within ${timeout_seconds}s (${url})" >&2
+      echo "deploy.sh: ERROR: check 'docker logs onlyoffice' and that host port 5003 is reachable" >&2
+      return 1
+    fi
+    sleep 3
+  done
+}
+
+ensure_nextcloud_installed() {
+  local admin_user="${1:-admin}"
+  local admin_password="${2:-admin}"
+
+  if docker exec --user www-data nextcloud php occ config:system:get installed 2>/dev/null | grep -q '^true$'; then
+    echo "deploy.sh: Nextcloud is already installed"
+    return 0
+  fi
+
+  echo "deploy.sh: Installing Nextcloud non-interactively..."
+  docker exec --user www-data nextcloud php occ maintenance:install \
+    --database sqlite \
+    --database-name nextcloud \
+    --admin-user "${admin_user}" \
+    --admin-pass "${admin_password}"
+}
+
 write_kin_nginx_module() {
   local kin_build_path="$1"
   local prefix="$2"
@@ -142,7 +204,10 @@ location ^~ ${prefix}/ds/ {
     include snippets/proxy-websocket.conf;
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     sub_filter_once off;
+    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -160,13 +225,45 @@ location ^~ ${prefix}/ {
     include snippets/proxy-websocket.conf;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types application/javascript;
+    sub_filter_types text/html text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
+    sub_filter 'href="/core/' 'href="${prefix}/core/';
+    sub_filter 'href="/apps/' 'href="${prefix}/apps/';
+    sub_filter 'href="/dist/' 'href="${prefix}/dist/';
+    sub_filter 'src="/core/' 'src="${prefix}/core/';
+    sub_filter 'src="/apps/' 'src="${prefix}/apps/';
+    sub_filter 'src="/dist/' 'src="${prefix}/dist/';
+    sub_filter 'action="/index.php' 'action="${prefix}/index.php';
+    sub_filter '"/core/' '"${prefix}/core/';
+    sub_filter '"/apps/' '"${prefix}/apps/';
+    sub_filter '"/dist/' '"${prefix}/dist/';
+    sub_filter '"/ocs/' '"${prefix}/ocs/';
+    sub_filter '"/index.php' '"${prefix}/index.php';
+    sub_filter '"/remote.php' '"${prefix}/remote.php';
+    sub_filter '"/public.php' '"${prefix}/public.php';
+    sub_filter "'/core/" "'${prefix}/core/";
+    sub_filter "'/apps/" "'${prefix}/apps/";
+    sub_filter "'/dist/" "'${prefix}/dist/";
+    sub_filter "'/ocs/" "'${prefix}/ocs/";
+    sub_filter "'/index.php" "'${prefix}/index.php";
+    sub_filter "'/remote.php" "'${prefix}/remote.php";
+    sub_filter "'/public.php" "'${prefix}/public.php";
+    sub_filter 'url(/core/' 'url(${prefix}/core/';
+    sub_filter 'url(/apps/' 'url(${prefix}/apps/';
+    sub_filter 'url(/dist/' 'url(${prefix}/dist/';
+    sub_filter "url('/core/" "url('${prefix}/core/";
+    sub_filter "url('/apps/" "url('${prefix}/apps/";
+    sub_filter "url('/dist/" "url('${prefix}/dist/";
+    sub_filter 'url("/core/' 'url("${prefix}/core/';
+    sub_filter 'url("/apps/' 'url("${prefix}/apps/';
+    sub_filter 'url("/dist/' 'url("${prefix}/dist/';
 
     proxy_hide_header X-Frame-Options;
     add_header X-Frame-Options "ALLOWALL" always;
@@ -233,12 +330,17 @@ location ^~ ${prefix}/ds/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     sub_filter_once off;
+    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -248,11 +350,15 @@ location ^~ ${prefix}/direct/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
 }
 
 location ^~ ${prefix}/ {
@@ -261,18 +367,52 @@ location ^~ ${prefix}/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types application/javascript;
+    sub_filter_types text/html text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
+    sub_filter 'href="/core/' 'href="${prefix}/core/';
+    sub_filter 'href="/apps/' 'href="${prefix}/apps/';
+    sub_filter 'href="/dist/' 'href="${prefix}/dist/';
+    sub_filter 'src="/core/' 'src="${prefix}/core/';
+    sub_filter 'src="/apps/' 'src="${prefix}/apps/';
+    sub_filter 'src="/dist/' 'src="${prefix}/dist/';
+    sub_filter 'action="/index.php' 'action="${prefix}/index.php';
+    sub_filter '"/core/' '"${prefix}/core/';
+    sub_filter '"/apps/' '"${prefix}/apps/';
+    sub_filter '"/dist/' '"${prefix}/dist/';
+    sub_filter '"/ocs/' '"${prefix}/ocs/';
+    sub_filter '"/index.php' '"${prefix}/index.php';
+    sub_filter '"/remote.php' '"${prefix}/remote.php';
+    sub_filter '"/public.php' '"${prefix}/public.php';
+    sub_filter "'/core/" "'${prefix}/core/";
+    sub_filter "'/apps/" "'${prefix}/apps/";
+    sub_filter "'/dist/" "'${prefix}/dist/";
+    sub_filter "'/ocs/" "'${prefix}/ocs/";
+    sub_filter "'/index.php" "'${prefix}/index.php";
+    sub_filter "'/remote.php" "'${prefix}/remote.php";
+    sub_filter "'/public.php" "'${prefix}/public.php";
+    sub_filter 'url(/core/' 'url(${prefix}/core/';
+    sub_filter 'url(/apps/' 'url(${prefix}/apps/';
+    sub_filter 'url(/dist/' 'url(${prefix}/dist/';
+    sub_filter "url('/core/" "url('${prefix}/core/";
+    sub_filter "url('/apps/" "url('${prefix}/apps/";
+    sub_filter "url('/dist/" "url('${prefix}/dist/";
+    sub_filter 'url("/core/' 'url("${prefix}/core/';
+    sub_filter 'url("/apps/' 'url("${prefix}/apps/';
+    sub_filter 'url("/dist/' 'url("${prefix}/dist/';
 
     proxy_hide_header X-Frame-Options;
     add_header X-Frame-Options "ALLOWALL" always;
@@ -334,12 +474,17 @@ location ^~ ${prefix}/ds/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     sub_filter_once off;
+    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -349,18 +494,52 @@ location ^~ ${prefix}/ {
     proxy_set_header X-Real-IP \$remote_addr;
     proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_http_version 1.1;
     proxy_set_header Upgrade \$http_upgrade;
-    proxy_set_header Connection "upgrade";
+    proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types application/javascript;
+    sub_filter_types text/html text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
+    sub_filter 'href="/core/' 'href="${prefix}/core/';
+    sub_filter 'href="/apps/' 'href="${prefix}/apps/';
+    sub_filter 'href="/dist/' 'href="${prefix}/dist/';
+    sub_filter 'src="/core/' 'src="${prefix}/core/';
+    sub_filter 'src="/apps/' 'src="${prefix}/apps/';
+    sub_filter 'src="/dist/' 'src="${prefix}/dist/';
+    sub_filter 'action="/index.php' 'action="${prefix}/index.php';
+    sub_filter '"/core/' '"${prefix}/core/';
+    sub_filter '"/apps/' '"${prefix}/apps/';
+    sub_filter '"/dist/' '"${prefix}/dist/';
+    sub_filter '"/ocs/' '"${prefix}/ocs/';
+    sub_filter '"/index.php' '"${prefix}/index.php';
+    sub_filter '"/remote.php' '"${prefix}/remote.php';
+    sub_filter '"/public.php' '"${prefix}/public.php';
+    sub_filter "'/core/" "'${prefix}/core/";
+    sub_filter "'/apps/" "'${prefix}/apps/";
+    sub_filter "'/dist/" "'${prefix}/dist/";
+    sub_filter "'/ocs/" "'${prefix}/ocs/";
+    sub_filter "'/index.php" "'${prefix}/index.php";
+    sub_filter "'/remote.php" "'${prefix}/remote.php";
+    sub_filter "'/public.php" "'${prefix}/public.php";
+    sub_filter 'url(/core/' 'url(${prefix}/core/';
+    sub_filter 'url(/apps/' 'url(${prefix}/apps/';
+    sub_filter 'url(/dist/' 'url(${prefix}/dist/';
+    sub_filter "url('/core/" "url('${prefix}/core/";
+    sub_filter "url('/apps/" "url('${prefix}/apps/";
+    sub_filter "url('/dist/" "url('${prefix}/dist/";
+    sub_filter 'url("/core/' 'url("${prefix}/core/';
+    sub_filter 'url("/apps/' 'url("${prefix}/apps/';
+    sub_filter 'url("/dist/' 'url("${prefix}/dist/';
 
     proxy_hide_header X-Frame-Options;
     add_header X-Frame-Options "ALLOWALL" always;
@@ -408,10 +587,30 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     fi
     KIN_PUBLIC_BASE_URL="https://${KIN_OIDC_HOST}"
     KIN_OFFICE_PUBLIC_URL="${KIN_PUBLIC_BASE_URL}${KIN_OFFICE_PREFIX}"
+    NEXTCLOUD_ADMIN_USER="${NEXTCLOUD_ADMIN_USER:-admin}"
+    NEXTCLOUD_ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD:-K1nNextcloud2024!}"
+    KIN_OIDC_DISCOVERY_URI="${KIN_PUBLIC_BASE_URL}/.well-known/openid-configuration"
+    KIN_OIDC_CLIENT_ID="kin-nextcloud"
+    KIN_OIDC_CLIENT_SECRET="kin-nextcloud-secret"
+    if KIN_OIDC_CONFIG=$(read_kin_oidc_config "${KIN_CONFIG_FILE}" 2>/dev/null); then
+        IFS='|' read -r cfg_issuer cfg_client_id cfg_client_secret <<< "${KIN_OIDC_CONFIG}"
+        if [[ -n "${cfg_issuer}" ]]; then
+            KIN_OIDC_DISCOVERY_URI="${cfg_issuer%/}/.well-known/openid-configuration"
+        fi
+        if [[ -n "${cfg_client_id}" ]]; then
+            KIN_OIDC_CLIENT_ID="${cfg_client_id}"
+        fi
+        if [[ -n "${cfg_client_secret}" ]]; then
+            KIN_OIDC_CLIENT_SECRET="${cfg_client_secret}"
+        fi
+    fi
     export KIN_OIDC_HOST
     export KIN_OFFICE_PREFIX
     export KIN_PUBLIC_BASE_URL
     export KIN_OFFICE_PUBLIC_URL
+    export NEXTCLOUD_ADMIN_USER
+    export NEXTCLOUD_ADMIN_PASSWORD
+    export KIN_OIDC_DISCOVERY_URI
 
     # Start Docker containers with network-callable hostname
     cd "${ROOT}"
@@ -431,6 +630,15 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         $DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
     fi
 
+    ensure_nextcloud_installed "${NEXTCLOUD_ADMIN_USER}" "${NEXTCLOUD_ADMIN_PASSWORD}"
+
+    # Enable .htaccess processing and bake the subpath into Nextcloud's rewrite base.
+    echo "deploy.sh: Enabling Nextcloud subpath routing for ${KIN_OFFICE_PREFIX}..."
+    docker exec nextcloud sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ maintenance:update:htaccess 2>/dev/null || true
+    docker exec nextcloud apache2ctl graceful 2>/dev/null || true
+
     # Configure Nextcloud with the network-callable hostname (port 443)
     echo "deploy.sh: Configuring Nextcloud for ${KIN_OIDC_HOST}..."
     docker exec --user www-data nextcloud php occ config:system:set trusted_proxies 0 --value "0.0.0.0/0" 2>/dev/null || true
@@ -439,10 +647,54 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     docker exec --user www-data nextcloud php occ config:system:set overwritewebroot --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set overwrite.cli.url --value "${KIN_OFFICE_PUBLIC_URL}" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set trusted_domains 0 --value="*" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set allow_local_remote_servers --type boolean --value true 2>/dev/null || true
 
-    # Configure OnlyOffice DocumentServer URL (through Kin nginx on port 443)
+    # Configure Kin OIDC login for deployed installs. This must happen after
+    # Nextcloud is installed; otherwise occ app/provider commands are ignored.
+    echo "deploy.sh: Installing/enabling user_oidc app..."
+    docker exec --user www-data nextcloud php occ app:install user_oidc 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ app:enable user_oidc 2>/dev/null || true
+    echo "deploy.sh: Configuring user_oidc provider (${KIN_OIDC_DISCOVERY_URI})..."
+    docker exec --user www-data nextcloud php occ config:system:set user_oidc httpclient.allowselfsigned --type boolean --value true 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set user_oidc prompt --type string --value none 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ user_oidc:provider kin \
+        --discoveryuri="${KIN_OIDC_DISCOVERY_URI}" \
+        --clientid="${KIN_OIDC_CLIENT_ID}" \
+        --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
+        --unique-uid=0 \
+        --mapping-display-name="preferred_username" 2>/dev/null || true
+    if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
+        echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
+        docker exec --user www-data nextcloud php occ group:adduser admin "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null || true
+    fi
+
+    # Configure OnlyOffice for browser access through Kin nginx and internal container callbacks.
+    echo "deploy.sh: Installing/enabling OnlyOffice app..."
+    docker exec --user www-data nextcloud php occ app:install onlyoffice 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ app:enable onlyoffice 2>/dev/null || true
     ONLYOFFICE_URL="${KIN_OFFICE_PUBLIC_URL}/ds/"
+    echo "deploy.sh: Configuring OnlyOffice DocumentServerUrl to ${ONLYOFFICE_URL}..."
     docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="${ONLYOFFICE_URL}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://onlyofficedocs/" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value="http://nextcloud/" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value="true" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:delete onlyoffice settings_error 2>/dev/null || true
+    docker exec onlyoffice python3 -c "
+import json
+p = '/etc/onlyoffice/documentserver/local.json'
+with open(p) as f: c = json.load(f)
+rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaults',{})
+if rd.get('rejectUnauthorized') is not False:
+    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False)
+    with open(p,'w') as f: json.dump(c,f,indent=2)
+    print('  Updated local.json (rejectUnauthorized=false)')
+else:
+    print('  local.json already has rejectUnauthorized=false')
+" 2>/dev/null || true
+    docker exec onlyoffice supervisorctl restart ds:docservice ds:converter 2>/dev/null || true
+    wait_for_onlyoffice_api
 
     # Write nginx config into the system nginx site used by packaged Kin on port 443.
     write_system_nginx_module "${KIN_OFFICE_PREFIX}"
