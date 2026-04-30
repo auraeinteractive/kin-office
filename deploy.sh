@@ -141,6 +141,29 @@ PY
   done
 }
 
+wait_for_nextcloud_occ() {
+  local timeout_seconds="${1:-240}"
+  local start now
+  start="$(date +%s)"
+
+  echo "deploy.sh: Waiting for Nextcloud occ to become available..."
+  while true; do
+    if docker exec nextcloud sh -c 'test -f /var/www/html/occ && test -f /var/www/html/console.php && test -f /var/www/html/lib/versioncheck.php' >/dev/null 2>&1 &&
+       docker exec --user www-data nextcloud php occ status >/dev/null 2>&1; then
+      echo "deploy.sh: Nextcloud occ is ready"
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_seconds )); then
+      echo "deploy.sh: ERROR: Nextcloud occ did not become ready within ${timeout_seconds}s" >&2
+      echo "deploy.sh: ERROR: check 'docker logs nextcloud' before reloading kin-office again" >&2
+      return 1
+    fi
+    sleep 3
+  done
+}
+
 ensure_nextcloud_installed() {
   local admin_user="${1:-admin}"
   local admin_password="${2:-admin}"
@@ -630,6 +653,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         $DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
     fi
 
+    wait_for_nextcloud_occ
     ensure_nextcloud_installed "${NEXTCLOUD_ADMIN_USER}" "${NEXTCLOUD_ADMIN_PASSWORD}"
 
     # Enable .htaccess processing and bake the subpath into Nextcloud's rewrite base.
