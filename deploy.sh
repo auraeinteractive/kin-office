@@ -227,10 +227,7 @@ location ^~ ${prefix}/ds/ {
     include snippets/proxy-websocket.conf;
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     sub_filter_once off;
-    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -248,14 +245,12 @@ location ^~ ${prefix}/ {
     include snippets/proxy-websocket.conf;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types text/html text/css application/javascript text/javascript application/json;
+    sub_filter_types text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
     sub_filter 'href="/core/' 'href="${prefix}/core/';
     sub_filter 'href="/apps/' 'href="${prefix}/apps/';
@@ -360,10 +355,7 @@ location ^~ ${prefix}/ds/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     sub_filter_once off;
-    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -380,8 +372,6 @@ location ^~ ${prefix}/direct/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
 }
 
 location ^~ ${prefix}/ {
@@ -397,14 +387,12 @@ location ^~ ${prefix}/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types text/html text/css application/javascript text/javascript application/json;
+    sub_filter_types text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
     sub_filter 'href="/core/' 'href="${prefix}/core/';
     sub_filter 'href="/apps/' 'href="${prefix}/apps/';
@@ -504,10 +492,7 @@ location ^~ ${prefix}/ds/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     sub_filter_once off;
-    sub_filter_types text/html;
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
@@ -524,14 +509,12 @@ location ^~ ${prefix}/ {
     proxy_set_header Upgrade \$http_upgrade;
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
     proxy_force_ranges on;
     proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
-    sub_filter_types text/html text/css application/javascript text/javascript application/json;
+    sub_filter_types text/css application/javascript text/javascript application/json;
     sub_filter '</head>' '<script src="${prefix}/kin-bridge.js"></script></head>';
     sub_filter 'href="/core/' 'href="${prefix}/core/';
     sub_filter 'href="/apps/' 'href="${prefix}/apps/';
@@ -813,10 +796,19 @@ if [[ -n "${KIN_OIDC_CONFIG}" ]]; then
 fi
 
 cd "${ROOT}"
+# Detect docker compose command
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    DOCKER_COMPOSE="docker-compose"
+else
+    echo "deploy.sh: ERROR: docker compose not found" >&2
+    exit 1
+fi
 if [[ -f docker-compose.direct.yml ]]; then
   $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build --wait --timeout 180 nextcloud onlyoffice onlyoffice-direct
 else
-  $DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
+  $DOCKER_COMPOSE up -d --build --wait --timeout 180 nextcloud onlyoffice
 fi
 
 # Enable .htaccess processing (AllowOverride) for Nextcloud routing
