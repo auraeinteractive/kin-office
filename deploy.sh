@@ -620,6 +620,11 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
 
     # Start Docker containers with network-callable hostname
     cd "${ROOT}"
+    # Same-host Kin: map public hostname to Docker host so Nextcloud can fetch OIDC discovery
+    # (avoids hairpin/NAT when the container uses https://<hostname>/...).
+    if [[ -f "${ROOT}/write-compose-host-overlay.sh" ]]; then
+        bash "${ROOT}/write-compose-host-overlay.sh" "${ROOT}" "${KIN_OIDC_HOST}"
+    fi
     export KIN_OIDC_HOST
     # Detect docker compose command
     if docker compose version >/dev/null 2>&1; then
@@ -633,10 +638,17 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         echo "deploy.sh: ERROR: docker compose not found" >&2
         exit 1
     fi
+    deploy_compose_files=(-f docker-compose.yml)
     if [[ -f docker-compose.direct.yml ]]; then
-        $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
+        deploy_compose_files+=(-f docker-compose.direct.yml)
+    fi
+    if [[ -f docker-compose.kin-deploy-host.yml ]]; then
+        deploy_compose_files+=(-f docker-compose.kin-deploy-host.yml)
+    fi
+    if [[ -f docker-compose.direct.yml ]]; then
+        $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
     else
-        $DOCKER_COMPOSE up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
+        $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
     fi
 
     wait_for_nextcloud_occ

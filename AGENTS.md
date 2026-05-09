@@ -189,6 +189,7 @@ assign Nextcloud: Home:.Mounts/nextcloud
 
 - If the app opens but browser shows host unreachable, verify the hostname resolves to the server LAN IP.
 - Self-signed cert host verification can block access when hostname/IP does not match the cert.
+- **Nextcloud “Could not reach the OpenID Connect provider”** with Kin and containers on the same machine: the Nextcloud container must reach `https://<Kin hostname>/.well-known/openid-configuration` on the host. Packaged deploy writes `docker-compose.kin-deploy-host.yml` so `<hostname>` resolves to `host-gateway` inside the `nextcloud` container (avoids hairpin to the public IP). After upgrading, `sudo systemctl restart kin-office` (or re-run `deploy.sh --deploy-mode`) so the container is recreated with the extra host mapping.
 
 ## Differences from kinoffice (OwnCloud)
 

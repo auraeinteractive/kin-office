@@ -39,6 +39,14 @@ COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ -f "$COMPOSE_DIRECT_FILE" ]]; then
     COMPOSE_ARGS+=(-f "$COMPOSE_DIRECT_FILE")
 fi
+# Same-host Kin + Nextcloud in Docker: resolve public hostname to host-gateway for OIDC discovery.
+OVERLAY_FILE="$KIN_OFFICE_DIR/docker-compose.kin-deploy-host.yml"
+if [[ -n "${KIN_OIDC_HOST:-}" ]] && [[ -f "$KIN_OFFICE_DIR/write-compose-host-overlay.sh" ]]; then
+    bash "$KIN_OFFICE_DIR/write-compose-host-overlay.sh" "$KIN_OFFICE_DIR" "$KIN_OIDC_HOST"
+fi
+if [[ -f "$OVERLAY_FILE" ]]; then
+    COMPOSE_ARGS+=(-f "$OVERLAY_FILE")
+fi
 
 backup_nextcloud_config() {
     if ! docker container inspect nextcloud >/dev/null 2>&1; then

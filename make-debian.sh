@@ -58,6 +58,10 @@ if [[ -f "$ROOT/docker-compose.direct.yml" ]]; then
 fi
 cp -a "$ROOT/deploy.sh" "$MODULE_DIR/"
 cp -a "$ROOT/build-apps.sh" "$MODULE_DIR/"
+if [[ -f "$ROOT/write-compose-host-overlay.sh" ]]; then
+	cp -a "$ROOT/write-compose-host-overlay.sh" "$MODULE_DIR/"
+	chmod 755 "$MODULE_DIR/write-compose-host-overlay.sh"
+fi
 chmod 755 "$MODULE_DIR/deploy.sh" "$MODULE_DIR/build-apps.sh"
 
 # Copy nginx/ directory
