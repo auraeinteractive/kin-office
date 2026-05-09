@@ -24,13 +24,17 @@ if [[ -f "$KIN_CONFIG_FILE" ]]; then
 fi
 export KIN_OFFICE_PREFIX="${KIN_OFFICE_PREFIX:-/kin-office}"
 
-# Use docker compose v2 (plugin) - the official/recommended way
-if ! docker compose version >/dev/null 2>&1; then
-    echo "ERROR: 'docker compose' (v2) not found. Install docker compose plugin."
+# Prefer docker compose v2 (plugin); fall back to standalone docker-compose (e.g. some EC2/Ubuntu images).
+if docker compose version >/dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then
+    DOCKER_COMPOSE=(docker-compose)
+else
+    echo "ERROR: Neither 'docker compose' (v2 plugin) nor 'docker-compose' found." >&2
+    echo "Install one of: docker-compose-plugin (apt: docker-compose-plugin) or docker-compose (legacy)." >&2
     exit 1
 fi
-DOCKER_COMPOSE="docker compose"
-echo "Using: $DOCKER_COMPOSE"
+echo "Using: ${DOCKER_COMPOSE[*]}"
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ -f "$COMPOSE_DIRECT_FILE" ]]; then
     COMPOSE_ARGS+=(-f "$COMPOSE_DIRECT_FILE")
@@ -74,7 +78,13 @@ start_containers() {
     fi
 
     echo "Starting kin-office containers..."
-    $DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180 "${services[@]}"
+    # --wait is Compose v2 only; legacy docker-compose v1 will error on it.
+    if [[ "${DOCKER_COMPOSE[0]}" == "docker" && "${DOCKER_COMPOSE[1]}" == "compose" ]]; then
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180 "${services[@]}"
+    else
+        echo "WARNING: using docker-compose without --wait; containers may still be starting."
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build "${services[@]}"
+    fi
 }
 
 case "$ACTION" in
@@ -82,7 +92,7 @@ case "$ACTION" in
         ;;
     stop)
         echo "Stopping kin-office containers..."
-        $DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" stop
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" stop
         exit 0
         ;;
     *)

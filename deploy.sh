@@ -624,16 +624,19 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     # Detect docker compose command
     if docker compose version >/dev/null 2>&1; then
         DOCKER_COMPOSE="docker compose"
+        COMPOSE_UP_WAIT=(--wait --timeout 180)
     elif command -v docker-compose >/dev/null 2>&1; then
         DOCKER_COMPOSE="docker-compose"
+        COMPOSE_UP_WAIT=()
+        echo "deploy.sh: WARNING: using docker-compose without --wait (Compose v2 plugin not installed)" >&2
     else
         echo "deploy.sh: ERROR: docker compose not found" >&2
         exit 1
     fi
     if [[ -f docker-compose.direct.yml ]]; then
-        $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build --wait --timeout 180 nextcloud onlyoffice onlyoffice-direct
+        $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
     else
-        $DOCKER_COMPOSE up -d --wait --timeout 180 nextcloud onlyoffice
+        $DOCKER_COMPOSE up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
     fi
 
     wait_for_nextcloud_occ
@@ -799,16 +802,19 @@ cd "${ROOT}"
 # Detect docker compose command
 if docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE="docker compose"
+    COMPOSE_UP_WAIT=(--wait --timeout 180)
 elif command -v docker-compose >/dev/null 2>&1; then
     DOCKER_COMPOSE="docker-compose"
+    COMPOSE_UP_WAIT=()
+    echo "deploy.sh: WARNING: using docker-compose without --wait (Compose v2 plugin not installed)" >&2
 else
     echo "deploy.sh: ERROR: docker compose not found" >&2
     exit 1
 fi
 if [[ -f docker-compose.direct.yml ]]; then
-  $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build --wait --timeout 180 nextcloud onlyoffice onlyoffice-direct
+  $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
 else
-  $DOCKER_COMPOSE up -d --build --wait --timeout 180 nextcloud onlyoffice
+  $DOCKER_COMPOSE up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
 fi
 
 # Enable .htaccess processing (AllowOverride) for Nextcloud routing
