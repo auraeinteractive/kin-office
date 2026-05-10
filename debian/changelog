@@ -1,3 +1,11 @@
+kin-office (1.0.4-1) stable; urgency=medium
+
+  * deploy: probe OIDC discovery from the nextcloud container against several URLs
+    (configured, https://host/.well-known, :9219, host.docker.internal:9219) and
+    register user_oidc with the first that returns valid discovery JSON.
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 18:00:00 +0000
+
 kin-office (1.0.3-1) stable; urgency=medium
 
   * postinst: start or restart kin-office on configure so deploy.sh runs after every install/upgrade.

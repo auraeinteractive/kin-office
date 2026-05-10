@@ -117,7 +117,7 @@ All configuration is handled automatically by `deploy.sh`. On first run, it:
 
 For manual overrides, the following can be set in `.config.ini`:
 
-**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`. Nextcloud’s public URL is **https://hostname/kin-office/** (443). OIDC discovery defaults to **https://hostname/.well-known/openid-configuration** (same host, port 443). If Kin only exposes OIDC on workspace **:9219**, set **`issuer=https://hostname:9219`** in that config (so discovery matches), or add a systemd drop-in for **`kin-office.service`** with **`Environment=KIN_OIDC_DISCOVERY_PORT=9219`**.
+**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`. Nextcloud’s public URL is **https://hostname/kin-office/** (443). OIDC discovery starts from **`issuer=`** (if set), else **`KIN_OIDC_DISCOVERY_PORT`**, else **https://hostname/.well-known/openid-configuration**. Deploy then **probes from inside the `nextcloud` container** that URL plus **https://hostname:9219/...** and **https://host.docker.internal:9219/...**, and registers **`user_oidc`** with the **first** response that is valid OIDC JSON (so admins need not guess which port Kin uses when both are possible).
 
 ```ini
 KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
