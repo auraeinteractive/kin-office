@@ -85,13 +85,14 @@ start_containers() {
         services+=(onlyoffice-direct)
     fi
 
-    echo "Starting kin-office containers..."
+    echo "Starting kin-office containers (first start may pull large images; see journalctl -u kin-office -f)..."
     # --wait is Compose v2 only; legacy docker-compose v1 will error on it.
+    # Omit --build on routine restarts; compose still builds images that are missing.
     if [[ "${DOCKER_COMPOSE[0]}" == "docker" && "${DOCKER_COMPOSE[1]}" == "compose" ]]; then
-        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180 "${services[@]}"
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --wait --timeout 180 "${services[@]}"
     else
         echo "WARNING: using docker-compose without --wait; containers may still be starting."
-        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build "${services[@]}"
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d "${services[@]}"
     fi
 }
 
@@ -116,6 +117,7 @@ restore_nextcloud_config
 # deploy.sh --deploy-mode applies runtime config after containers are running.
 if [[ -f "deploy.sh" ]]; then
     echo "Running deploy.sh --deploy-mode..."
+    export KIN_OFFICE_SKIP_COMPOSE_UP=1
     bash deploy.sh --deploy-mode
 else
     echo "deploy.sh not found; skipping runtime configuration"

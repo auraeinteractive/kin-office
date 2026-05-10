@@ -645,10 +645,18 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     if [[ -f docker-compose.kin-deploy-host.yml ]]; then
         deploy_compose_files+=(-f docker-compose.kin-deploy-host.yml)
     fi
-    if [[ -f docker-compose.direct.yml ]]; then
-        $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
+    # kin-office-wrapper.sh already runs compose up; skip here to avoid a second
+    # --wait (several minutes) on every service restart. Manual: unset
+    # KIN_OFFICE_SKIP_COMPOSE_UP or run deploy.sh from a shell without it.
+    if [[ "${KIN_OFFICE_SKIP_COMPOSE_UP:-}" == "1" ]]; then
+        echo "deploy.sh: Skipping docker compose up (KIN_OFFICE_SKIP_COMPOSE_UP=1, containers already started)"
     else
-        $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
+        echo "deploy.sh: Starting containers (docker compose up)..."
+        if [[ -f docker-compose.direct.yml ]]; then
+            $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
+        else
+            $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
+        fi
     fi
 
     wait_for_nextcloud_occ

@@ -99,6 +99,7 @@ docker compose up -d --build
 # Manage service (after installing .deb)
 sudo systemctl start|stop|restart|reload kin-office
 sudo service kin-office start|stop|restart|reload
+# First start: large image pulls and compose --wait can take several minutes; use `journalctl -u kin-office -f` for live output.
 
 # Deploy mode: read hostname from /etc/kin/config.ini, use port 443
 ./deploy.sh --deploy-mode
