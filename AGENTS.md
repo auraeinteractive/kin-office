@@ -192,6 +192,24 @@ assign Nextcloud: Home:.Mounts/nextcloud
 - Self-signed cert host verification can block access when hostname/IP does not match the cert.
 - **Nextcloud “Could not reach the OpenID Connect provider”** means the **Nextcloud PHP stack** cannot HTTP-fetch Kin’s discovery URL from **inside** the `nextcloud` container (nginx `/kin-office/` can still work — that is a separate hop to `127.0.0.1:8081`). Packaged deploy writes `docker-compose.kin-deploy-host.yml` so `<hostname>` from `/etc/kin/config.ini` resolves to `host-gateway` for that container. If `kin-office.service` never completed `deploy.sh --deploy-mode` (check `journalctl -u kin-office`), OIDC may be unset; deploy used to hide `occ user_oidc:provider` failures — fixed to fail loud and probe discovery before registering the provider.
 
+### kinnextcloud console messages (typical order)
+
+1. **`[kinnextcloud] Opening Nextcloud at: …/kin-office/index.php/login`** — The workspace app loads the iframe at the canonical login entry (good).
+
+2. **`GET …/kin-office/apps/user_oidc/login/1` → 404** — The browser follows Nextcloud’s redirect to the **user_oidc** login route for provider id **1**. A **404** here can mean:
+   - **Often (packaged Kin):** **user_oidc** itself answers **HTTP 404** when discovery fails or the provider id is unknown (see `LoginController` in [nextcloud/user_oidc](https://github.com/nextcloud/user_oidc) — same status as the “Could not reach…” / “no such provider” pages). That is **not** proof that Kin’s IdP JSON is wrong **before** you rule out routing: it *is* consistent with **discovery unreachable from the container**.
+   - **Also possible:** reverse proxy never forwards `/kin-office/` to `127.0.0.1:8081`, wrong `overwritewebroot` / `htaccess.RewriteBase`, app disabled, etc. Use response **body** (Nextcloud error UI vs plain nginx 404) to tell them apart.
+
+3. **`kin-bridge` rewrite → `…/index.php/apps/user_oidc/login/1` → 404** — The bridge forces the front-controller URL when the pretty path is used. **If discovery still fails, this URL also 404s** for the same app-level reason as (2), not necessarily because nginx cannot run `index.php`.
+
+4. **`user_oidc: Nextcloud cannot fetch OIDC discovery…`** — Scripted diagnosis: page text matches the discovery failure case, or deploy never registered a working discovery URL. Deploy **probes** several discovery URLs from inside `nextcloud` (configured URL, `https://<host>/.well-known/…`, `:9219`, `host.docker.internal:9219`) and registers **`user_oidc`** with the first that returns **2xx + JSON with `issuer`**.
+
+5. **`[kinnextcloud] OIDC setup: …`** — The parent app logs the iframe `postMessage` from kin-bridge (`kinBridgeError` / `user_oidc_discovery`).
+
+The **`app.js?v=…`** hash is the **Kin workspace asset id** for that build; it does not explain 404 vs 200 by itself.
+
+**Checks:** from the `nextcloud` container, `curl -kSsS` each discovery candidate; on the host, confirm **443** (and **9219** if used) serves `/.well-known/openid-configuration` with a valid OIDC document; `docker exec --user www-data nextcloud php occ user_oidc:provider kin` (output) after deploy; compare `overwritehost` / `overwritewebroot` / `overwrite.cli.url` with how Kin nginx strips `/kin-office/` before `proxy_pass`.
+
 ## Differences from kinoffice (OwnCloud)
 
 | Aspect | kinoffice (OwnCloud) | nextcloud |
