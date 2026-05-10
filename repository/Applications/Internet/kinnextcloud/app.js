@@ -34,14 +34,17 @@
 
         var params = new URLSearchParams(window.location.search);
         var nextcloudUrl = resolveNextcloudOrigin(params);
+        // Canonical login entry avoids user_oidc redirect bugs on subpath installs
+        // (e.g. broken "index.php_oidc/login/N"; see nextcloud/user_oidc#766).
+        var iframeSrc = trimTrailingSlash(nextcloudUrl) + '/index.php/login';
 
         iframeEl = document.createElement('iframe');
         iframeEl.id = 'iframe';
         iframeEl.title = 'Nextcloud';
-        iframeEl.src = nextcloudUrl;
+        iframeEl.src = iframeSrc;
         document.body.appendChild(iframeEl);
 
-        log('Opening Nextcloud at:', nextcloudUrl, '(header visible by default)');
+        log('Opening Nextcloud at:', iframeSrc, '(header visible by default)');
     }
 
     init();

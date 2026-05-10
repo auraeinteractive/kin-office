@@ -684,7 +684,23 @@
 
     // --- URL change detection for SPA navigation ---
 
+    // user_oidc can redirect to "index.php_oidc/login/N" instead of
+    // "index.php/apps/user_oidc/login/N" (upstream user_oidc #766; subpath installs).
+    function fixUserOidcMangledUrl() {
+        var p = window.location.pathname || '';
+        if (p.indexOf('index.php_oidc') === -1) {
+            return false;
+        }
+        var fixedPath = p.replace(/index\.php_oidc/g, 'index.php/apps/user_oidc');
+        log('Fixing malformed user_oidc URL', p, '->', fixedPath);
+        window.location.replace(window.location.origin + fixedPath + window.location.search + window.location.hash);
+        return true;
+    }
+
     function handleUrlChange() {
+        if (fixUserOidcMangledUrl()) {
+            return;
+        }
         var status = getStatus();
         log('URL changed to:', status.url);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage);
@@ -719,6 +735,9 @@
     // kinEditorKeydown → kinBridgeEditorKeydown for debounced autosave.
 
     function init() {
+        if (fixUserOidcMangledUrl()) {
+            return;
+        }
         var status = getStatus();
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
