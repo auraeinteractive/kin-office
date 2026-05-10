@@ -202,8 +202,8 @@ verify_oidc_discovery_from_nextcloud() {
     docker exec nextcloud head -c 400 "${probe}" 2>/dev/null >&2 || true
     echo "" >&2
     docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
-    echo "deploy.sh: Hint: Kin must serve /.well-known/openid-configuration at this URL on the host nginx." >&2
-    echo "deploy.sh: If OIDC only exists on :9219, set issuer=https://hostname:9219 in /etc/kin/config.ini so deploy uses that for discovery." >&2
+    echo "deploy.sh: Hint: Kin must serve /.well-known/openid-configuration at this URL (Kin workspace is usually :9219)." >&2
+    echo "deploy.sh: Set issuer=https://... in /etc/kin/config.ini to override discovery; default is https://hostname:9219/..." >&2
     echo "deploy.sh: Same-host: ensure docker-compose.kin-deploy-host.yml is applied (host-gateway)." >&2
     exit 1
   fi
@@ -607,7 +607,7 @@ EOF
   fi
 }
 
-# Deploy mode: read hostname from /etc/kin/config.ini, expect Kin on port 443
+# Deploy mode: read hostname from /etc/kin/config.ini; Nextcloud public URL on 443, OIDC discovery often :9219
 if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     KIN_CONFIG_FILE="/etc/kin/config.ini"
     if [[ ! -f "${KIN_CONFIG_FILE}" ]]; then
@@ -619,7 +619,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         echo "deploy.sh: ERROR: [KinCore] hostname= not set in ${KIN_CONFIG_FILE}" >&2
         exit 1
     fi
-    echo "deploy.sh: Deploy mode: using hostname=${KIN_OIDC_HOST} (port 443)"
+    echo "deploy.sh: Deploy mode: hostname=${KIN_OIDC_HOST} (Nextcloud/browser on 443; OIDC discovery defaults to :9219 unless issuer= in ${KIN_CONFIG_FILE})"
     KIN_OFFICE_PREFIX="$(normalize_prefix "${KIN_OFFICE_PREFIX}")"
     if [[ -z "${KIN_OFFICE_PREFIX}" ]]; then
         echo "deploy.sh: ERROR: KIN_OFFICE_PREFIX must not be /" >&2
@@ -629,7 +629,8 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     KIN_OFFICE_PUBLIC_URL="${KIN_PUBLIC_BASE_URL}${KIN_OFFICE_PREFIX}"
     NEXTCLOUD_ADMIN_USER="${NEXTCLOUD_ADMIN_USER:-admin}"
     NEXTCLOUD_ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD:-K1nNextcloud2024!}"
-    KIN_OIDC_DISCOVERY_URI="${KIN_PUBLIC_BASE_URL}/.well-known/openid-configuration"
+    # Kin HTTP OIDC is normally on workspace TLS :9219; system nginx :443 often has no /.well-known/ yet (404).
+    KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:9219/.well-known/openid-configuration"
     KIN_OIDC_CLIENT_ID="kin-nextcloud"
     KIN_OIDC_CLIENT_SECRET="kin-nextcloud-secret"
     if KIN_OIDC_CONFIG=$(read_kin_oidc_config "${KIN_CONFIG_FILE}" 2>/dev/null); then

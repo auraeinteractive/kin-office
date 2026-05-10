@@ -117,7 +117,7 @@ All configuration is handled automatically by `deploy.sh`. On first run, it:
 
 For manual overrides, the following can be set in `.config.ini`:
 
-**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`, uses port 443 (HTTPS). Designed for production .deb installs where Kin runs behind Nginx on standard HTTPS port. The `kin-office.service` systemd service runs deploy mode automatically on start/reload.
+**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`. Nextcloud’s public URL uses **https://hostname/** (port 443). OIDC discovery for `user_oidc` defaults to **https://hostname:9219/.well-known/...** (Kin’s workspace TLS port) unless `issuer=` in the same config overrides it—443 often has no OIDC document yet (404).
 
 ```ini
 KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
