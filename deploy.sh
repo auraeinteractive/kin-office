@@ -181,11 +181,13 @@ ensure_nextcloud_installed() {
     --admin-pass "${admin_password}"
 }
 
-# Deploy mode: fail fast if the nextcloud container cannot reach Kin OIDC discovery
-# (otherwise user_oidc shows "Could not reach the OpenID Connect provider" with no deploy error).
+# Deploy mode: log whether the nextcloud container can reach Kin OIDC discovery.
+# Non-fatal by default so kin-office can start (nginx + containers) when Kin has not
+# exposed /.well-known/ on 443 yet. Set KIN_OFFICE_STRICT_OIDC=1 to fail the unit instead.
 verify_oidc_discovery_from_nextcloud() {
   local uri="$1"
   local probe=/tmp/kin-office-oidc-probe.json
+  local strict="${KIN_OFFICE_STRICT_OIDC:-}"
   echo "deploy.sh: Verifying OIDC discovery from nextcloud container: ${uri}"
   if docker exec nextcloud sh -c 'command -v curl >/dev/null 2>&1'; then
     docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
@@ -198,20 +200,22 @@ verify_oidc_discovery_from_nextcloud() {
       echo "deploy.sh: OIDC discovery OK from nextcloud container (HTTP ${code})"
       return 0
     fi
-    echo "deploy.sh: ERROR: discovery probe got HTTP ${code} (expected 2xx + JSON with issuer)" >&2
+    echo "deploy.sh: WARNING: discovery probe got HTTP ${code} (expected 2xx + JSON with issuer); kin-office will still start" >&2
     docker exec nextcloud head -c 400 "${probe}" 2>/dev/null >&2 || true
     echo "" >&2
     docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
-    echo "deploy.sh: Hint: Kin must serve /.well-known/openid-configuration at this URL." >&2
-    echo "deploy.sh: Production Kin on 443 only: ensure nginx proxies OIDC discovery on https://hostname/.well-known/..." >&2
-    echo "deploy.sh: LAN Kin on :9219: set Environment=KIN_OIDC_DISCOVERY_PORT=9219 for kin-office.service, or issuer=https://host:9219 in config.ini." >&2
-    echo "deploy.sh: Same-host: ensure docker-compose.kin-deploy-host.yml is applied (host-gateway)." >&2
-    exit 1
+    echo "deploy.sh: Fix Kin nginx OIDC on 443, set issuer= or KIN_OIDC_DISCOVERY_PORT=9219, then: sudo systemctl reload kin-office" >&2
+    if [[ "${strict}" == "1" ]]; then
+      exit 1
+    fi
+    return 0
   fi
   if ! docker exec -e "DISCOVERY_URI=${uri}" --user www-data nextcloud php -r '$u=getenv("DISCOVERY_URI"); $c=@file_get_contents($u,false,stream_context_create(["http"=>["timeout"=>25,"follow_location"=>1],"ssl"=>["verify_peer"=>false,"verify_peer_name"=>false]])); if ($c===false || strpos($c,"issuer")===false) { fwrite(STDERR,"deploy.sh: discovery fetch failed or response is not OIDC JSON\n"); exit(1);}'; then
-    echo "deploy.sh: ERROR: could not load OIDC discovery from inside nextcloud (TLS, DNS, hairpin, or wrong URL)" >&2
-    echo "deploy.sh: Hint: same-host Kin needs docker-compose.kin-deploy-host.yml (see write-compose-host-overlay.sh)" >&2
-    exit 1
+    echo "deploy.sh: WARNING: could not load OIDC discovery from inside nextcloud (curl missing and PHP probe failed)" >&2
+    if [[ "${strict}" == "1" ]]; then
+      exit 1
+    fi
+    return 0
   fi
   echo "deploy.sh: OIDC discovery URL is reachable from the nextcloud container (php probe)"
 }
@@ -740,8 +744,10 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
         --unique-uid=0 \
         --mapping-display-name="preferred_username"; then
-        echo "deploy.sh: ERROR: user_oidc:provider kin failed (discovery URI, client id/secret, or occ output above)" >&2
-        exit 1
+        echo "deploy.sh: WARNING: user_oidc:provider kin failed; OIDC login will not work until discovery succeeds (fix Kin, then: sudo systemctl reload kin-office)" >&2
+        if [[ "${KIN_OFFICE_STRICT_OIDC:-}" == "1" ]]; then
+            exit 1
+        fi
     fi
     if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
         echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
