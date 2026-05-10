@@ -710,10 +710,13 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     wait_for_nextcloud_occ
     ensure_nextcloud_installed "${NEXTCLOUD_ADMIN_USER}" "${NEXTCLOUD_ADMIN_PASSWORD}"
 
-    # Enable .htaccess processing and bake the subpath into Nextcloud's rewrite base.
-    echo "deploy.sh: Enabling Nextcloud subpath routing for ${KIN_OFFICE_PREFIX}..."
+    # Kin nginx uses "location ... ${prefix}/ { proxy_pass http://127.0.0.1:8081/; }" — the trailing
+    # slash strips the public prefix, so Apache sees /apps/... not ${prefix}/apps/... . RewriteBase must
+    # be "/" here; setting it to the public webroot breaks pretty URLs (404 on /apps/user_oidc/...).
+    # Browser-facing URLs still use overwritewebroot / overwritehost below.
+    echo "deploy.sh: Enabling Nextcloud htaccess (RewriteBase / for stripped reverse-proxy path)..."
     docker exec nextcloud sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf 2>/dev/null || true
-    docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "/" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ maintenance:update:htaccess 2>/dev/null || true
     docker exec nextcloud apache2ctl graceful 2>/dev/null || true
 
