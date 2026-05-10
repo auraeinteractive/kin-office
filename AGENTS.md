@@ -45,7 +45,7 @@ Kin nginx (:9219/kin-office) <------------------- Nextcloud
 
 ### Kin Apps
 - Each app uses **`manifest.json` `entry`: `main.js`**, which opens the UI via **`kin.classes.Window`** and a view script (**`app.js`**) under **`/application.html`** (see main Kin repo `docs/how_to_write_kinapp.md`). Do not use per-package **`index.html`** as the primary entry.
-- `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app
+- `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app. If OpenID discovery fails, the app shows an **on-screen** panel (not only console) with **Retry** and **Use local Nextcloud login** (`/index.php/login?direct=1`). Open the app with **`?nextcloud_direct=1`** on the Kin URL to skip OIDC on first load (admin local login).
 - `repository/Applications/Office/kinonlyoffice_documents/` - launcher for new text documents
 - `repository/Applications/Office/kinonlyoffice_spreadsheets/` - launcher for new spreadsheets
 - `repository/Applications/Office/kinonlyoffice_presentations/` - launcher for new presentations
