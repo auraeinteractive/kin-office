@@ -181,146 +181,108 @@ ensure_nextcloud_installed() {
     --admin-pass "${admin_password}"
 }
 
-# Returns 0 if nextcloud container gets 2xx + JSON containing "issuer" from this URI (curl).
-probe_oidc_discovery_from_nextcloud() {
-  local uri="$1"
-  local probe=/tmp/kin-office-oidc-probe.json
-  if ! docker exec nextcloud sh -c 'command -v curl >/dev/null 2>&1' 2>/dev/null; then
-    return 1
-  fi
-  docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
-  local code
-  code="$(docker exec -e "DISCOVERY_URI=${uri}" nextcloud sh -c "curl -kSsSL --max-time 25 -o ${probe} -w '%{http_code}' \"\$DISCOVERY_URI\"" 2>/dev/null)" || code="000"
-  if [[ "${code}" =~ ^2[0-9][0-9]$ ]] && docker exec nextcloud grep -q '"issuer"' "${probe}" 2>/dev/null; then
-    docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
+kin_oidc_host_looks_like_ipv4() {
+  local h="${1:?}"
+  [[ "${h}" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]
+}
+
+maybe_write_compose_host_overlay() {
+  local module_root="${1:?}"
+  local host="${2:?}"
+  local script="${module_root}/write-compose-host-overlay.sh"
+  if [[ ! -f "${script}" ]]; then
     return 0
   fi
-  docker exec nextcloud rm -f "${probe}" 2>/dev/null || true
+  if kin_oidc_host_looks_like_ipv4 "${host}"; then
+    echo "deploy.sh: KIN_OIDC_HOST is an IPv4 literal; skipping write-compose-host-overlay (only DNS-like names are written to extra_hosts)."
+    return 0
+  fi
+  if bash "${script}" "${module_root}" "${host}"; then
+    echo "deploy.sh: wrote docker-compose.kin-deploy-host.yml (${host} → host-gateway for nextcloud)."
+  fi
+}
+
+clear_nextcloud_bruteforce_state() {
+  echo "deploy.sh: Clearing Nextcloud bruteforce counters (best-effort)..."
+  local ip
+  for ip in 127.0.0.1 ::1; do
+    docker exec --user www-data nextcloud php occ security:bruteforce:reset "${ip}" 2>/dev/null || true
+  done
+  if ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' nextcloud 2>/dev/null)" && [[ -n "${ip}" ]]; then
+    docker exec --user www-data nextcloud php occ security:bruteforce:reset "${ip}" 2>/dev/null || true
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    for ip in $(hostname -I 2>/dev/null || true); do
+      [[ -n "${ip}" ]] || continue
+      docker exec --user www-data nextcloud php occ security:bruteforce:reset "${ip}" 2>/dev/null || true
+    done
+  fi
+  if docker exec nextcloud sh -c 'command -v sqlite3 >/dev/null 2>&1 && test -f /var/www/html/data/nextcloud.db' >/dev/null 2>&1; then
+    docker exec nextcloud sqlite3 /var/www/html/data/nextcloud.db "DELETE FROM oc_bruteforce_attempts;" 2>/dev/null || true
+  fi
+}
+
+probe_oidc_discovery_from_nextcloud() {
+  local uri="$1"
+  docker exec nextcloud curl -fsSk --max-time 15 "${uri}" 2>/dev/null | \
+    python3 -c 'import json,sys
+try:
+  j=json.load(sys.stdin)
+except Exception:
+  sys.exit(1)
+sys.exit(0 if isinstance(j.get("issuer"),str) and j.get("issuer") else 1)' 2>/dev/null
+}
+
+# Pick the first discovery URL that returns JSON with issuer from inside nextcloud.
+select_oidc_discovery_uri_deploy_mode() {
+  local initial="${KIN_OIDC_DISCOVERY_URI:?}"
+  local host="${KIN_OIDC_HOST:?}"
+  local port="${KIN_OIDC_DISCOVERY_PORT:-9219}"
+  local seen="|"
+  local u
+
+  for u in "${initial}" \
+           "https://${host}/.well-known/openid-configuration" \
+           "https://${host}:9219/.well-known/openid-configuration" \
+           "https://host.docker.internal:9219/.well-known/openid-configuration" \
+           "https://${host}:${port}/.well-known/openid-configuration" \
+           "https://host.docker.internal:${port}/.well-known/openid-configuration"; do
+    [[ -z "${u}" ]] && continue
+    case "${seen}" in
+      *"|${u}|"*) continue ;;
+    esac
+    seen+="${u}|"
+    echo "deploy.sh: Probing OIDC discovery from nextcloud container: ${u}"
+    if probe_oidc_discovery_from_nextcloud "${u}"; then
+      export KIN_OIDC_DISCOVERY_URI="${u}"
+      echo "deploy.sh: Using OIDC discovery URI: ${KIN_OIDC_DISCOVERY_URI}"
+      return 0
+    fi
+  done
+
+  echo "deploy.sh: WARNING: no discovery URL responded with valid OIDC JSON from nextcloud; leaving KIN_OIDC_DISCOVERY_URI=${initial}" >&2
+  export KIN_OIDC_DISCOVERY_URI="${initial}"
   return 1
 }
 
-# Deploy mode: try common Kin discovery URLs from inside the nextcloud container and
-# set KIN_OIDC_DISCOVERY_URI to the first that works (443, workspace :9219, host.docker.internal:9219).
-select_oidc_discovery_uri_deploy_mode() {
-  local host="${KIN_OIDC_HOST}"
-  local strict="${KIN_OFFICE_STRICT_OIDC:-}"
-  local default443="https://${host}/.well-known/openid-configuration"
-  local cand9219="https://${host}:9219/.well-known/openid-configuration"
-  local candDocker9219="https://host.docker.internal:9219/.well-known/openid-configuration"
-  declare -a order=()
-  local u y
-  for u in "${KIN_OIDC_DISCOVERY_URI}" "${default443}" "${cand9219}" "${candDocker9219}"; do
-    [[ -z "${u}" ]] && continue
-    for y in "${order[@]}"; do
-      [[ "${u}" == "${y}" ]] && continue 2
-    done
-    order+=("${u}")
-  done
-
-  for u in "${order[@]}"; do
-    echo "deploy.sh: Probing OIDC discovery from nextcloud container: ${u}"
-    if probe_oidc_discovery_from_nextcloud "${u}"; then
-      KIN_OIDC_DISCOVERY_URI="${u}"
-      export KIN_OIDC_DISCOVERY_URI
-      echo "deploy.sh: OIDC discovery OK — registering provider with ${KIN_OIDC_DISCOVERY_URI}"
-      return 0
-    fi
-  done
-
-  echo "deploy.sh: WARNING: OIDC discovery not reachable from nextcloud for any candidate: ${order[*]}" >&2
-  echo "deploy.sh: Kin must serve /.well-known/openid-configuration (TLS) on 443 or 9219, or set issuer= in /etc/kin/config.ini." >&2
-  if [[ "${strict}" == "1" ]]; then
-    exit 1
-  fi
-  return 0
-}
-
-# Deploy mode: log whether the nextcloud container can reach Kin OIDC discovery.
-# Non-fatal by default so kin-office can start (nginx + containers) when Kin has not
-# exposed /.well-known/ on 443 yet. Set KIN_OFFICE_STRICT_OIDC=1 to fail the unit instead.
-verify_oidc_discovery_from_nextcloud() {
-  local uri="$1"
-  local strict="${KIN_OFFICE_STRICT_OIDC:-}"
-  echo "deploy.sh: Verifying OIDC discovery from nextcloud container: ${uri}"
-  if probe_oidc_discovery_from_nextcloud "${uri}"; then
-    echo "deploy.sh: OIDC discovery OK from nextcloud container"
+register_user_oidc_kin_strict() {
+  local discovery_uri="${1:?}"
+  echo "deploy.sh: Registering user_oidc provider 'kin' with discovery ${discovery_uri}..."
+  docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
+  if docker exec --user www-data nextcloud php occ user_oidc:provider kin \
+      --discoveryuri="${discovery_uri}" \
+      --clientid="${KIN_OIDC_CLIENT_ID}" \
+      --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
+      --unique-uid=0 \
+      --mapping-display-name="preferred_username"; then
+    echo "deploy.sh: user_oidc provider registered successfully."
     return 0
   fi
-  echo "deploy.sh: WARNING: discovery probe failed for ${uri} (expected 2xx + JSON with issuer); kin-office will still start" >&2
-  echo "deploy.sh: Fix Kin nginx OIDC on 443, set issuer= or KIN_OIDC_DISCOVERY_PORT=9219, then: sudo systemctl reload kin-office" >&2
-  if [[ "${strict}" == "1" ]]; then
+  echo "deploy.sh: ERROR: occ user_oidc:provider kin failed for discovery ${discovery_uri}" >&2
+  if [[ "${KIN_OFFICE_STRICT_OIDC:-}" == "1" ]]; then
     exit 1
   fi
-  if ! docker exec nextcloud sh -c 'command -v curl >/dev/null 2>&1' 2>/dev/null; then
-    if ! docker exec -e "DISCOVERY_URI=${uri}" --user www-data nextcloud php -r '$u=getenv("DISCOVERY_URI"); $c=@file_get_contents($u,false,stream_context_create(["http"=>["timeout"=>25,"follow_location"=>1],"ssl"=>["verify_peer"=>false,"verify_peer_name"=>false]])); if ($c===false || strpos($c,"issuer")===false) { fwrite(STDERR,"deploy.sh: discovery fetch failed or response is not OIDC JSON\n"); exit(1);}'; then
-      echo "deploy.sh: WARNING: could not load OIDC discovery from inside nextcloud (curl missing and PHP probe failed)" >&2
-      if [[ "${strict}" == "1" ]]; then
-        exit 1
-      fi
-      return 0
-    fi
-    echo "deploy.sh: OIDC discovery URL is reachable from the nextcloud container (php probe)"
-  fi
-  return 0
-}
-
-# Nextcloud throttles logins after failed attempts; OIDC/discovery debugging triggers this often.
-# Reset without admin manual steps: occ per-IP for common proxies + IPs seen in nextcloud.log, then
-# SQLite DELETE for default docker-compose installs (table may be absent — ignore errors).
-clear_nextcloud_bruteforce_state() {
-  if ! docker exec nextcloud sh -c 'test -f /var/www/html/occ' 2>/dev/null; then
-    return 0
-  fi
-  echo "deploy.sh: Clearing Nextcloud brute-force throttles (automated)..."
-  reset_bf_ip() {
-    local x="${1:-}"
-    [[ -z "${x}" ]] && return 0
-    docker exec --user www-data nextcloud php occ security:bruteforce:reset "${x}" 2>/dev/null || true
-  }
-  reset_bf_ip 127.0.0.1
-  reset_bf_ip "::1"
-  local gw
-  gw="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' nextcloud 2>/dev/null | awk 'NF {print; exit}')"
-  reset_bf_ip "${gw}"
-  local hip
-  if read -r -a hip <<< "$(hostname -I 2>/dev/null)"; then
-    for ip in "${hip[@]}"; do
-      reset_bf_ip "${ip}"
-    done
-  fi
-  local logf
-  logf="$(docker exec --user www-data nextcloud php occ config:system:get logfile 2>/dev/null | tr -d '\r\n' || true)"
-  if [[ -z "${logf}" ]]; then
-    logf="/var/www/html/data/nextcloud.log"
-  fi
-  if docker exec nextcloud test -f "${logf}" 2>/dev/null; then
-    local _bfips
-    _bfips="$(docker exec -e "LOGF=${logf}" nextcloud sh -c 'grep -hE "Bruteforce attempt|IP address throttled|IP address blocked" "${LOGF}" 2>/dev/null | tail -n 800' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)"
-    while IFS= read -r ip; do
-      [[ -n "${ip}" ]] && reset_bf_ip "${ip}"
-    done <<< "${_bfips}"
-  fi
-  local nc_dd nc_pfx
-  nc_dd="$(docker exec --user www-data nextcloud php occ config:system:get datadirectory 2>/dev/null | tr -d '\r\n' || true)"
-  nc_dd="${nc_dd:-/var/www/html/data}"
-  nc_pfx="$(docker exec --user www-data nextcloud php occ config:system:get dbtableprefix 2>/dev/null | tr -d '\r\n' || true)"
-  nc_pfx="${nc_pfx:-oc_}"
-  docker exec -e "NC_DD=${nc_dd}" -e "NC_PFX=${nc_pfx}" --user www-data nextcloud php -r '
-$dd = getenv("NC_DD") ?: "/var/www/html/data";
-$prefix = getenv("NC_PFX") ?: "oc_";
-$table = $prefix . "bruteforce_attempts";
-foreach (["nextcloud.db", "owncloud.db", "database.sqlite"] as $fn) {
-    $path = $dd . "/" . $fn;
-    if (!is_file($path)) {
-        continue;
-    }
-    try {
-        $pdo = new PDO("sqlite:" . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
-        $pdo->exec("DELETE FROM " . $table);
-    } catch (Throwable $e) {
-    }
-}
-' 2>/dev/null || true
+  return 1
 }
 
 write_kin_nginx_module() {
@@ -382,16 +344,13 @@ location ^~ ${prefix}/direct/ {
 }
 
 location ^~ ${prefix}/ {
-    # Pretty URL /apps/user_oidc/login/N can 404 behind stripped proxy + Apache rewrites; front controller always works.
-    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     include snippets/proxy-common.conf;
     include snippets/proxy-websocket.conf;
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
-    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
+    proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
@@ -520,7 +479,6 @@ location ^~ ${prefix}/direct/ {
 }
 
 location ^~ ${prefix}/ {
-    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -534,8 +492,7 @@ location ^~ ${prefix}/ {
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
-    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
+    proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
@@ -644,7 +601,6 @@ location ^~ ${prefix}/ds/ {
 }
 
 location ^~ ${prefix}/ {
-    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -658,8 +614,7 @@ location ^~ ${prefix}/ {
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
-    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
+    proxy_cookie_path / ${prefix}/;
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
@@ -722,7 +677,7 @@ EOF
   fi
 }
 
-# Deploy mode: read hostname from /etc/kin/config.ini; Kin on HTTPS (default discovery on 443).
+# Deploy mode: read hostname from /etc/kin/config.ini, expect Kin on port 443
 if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     KIN_CONFIG_FILE="/etc/kin/config.ini"
     if [[ ! -f "${KIN_CONFIG_FILE}" ]]; then
@@ -734,6 +689,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         echo "deploy.sh: ERROR: [KinCore] hostname= not set in ${KIN_CONFIG_FILE}" >&2
         exit 1
     fi
+    echo "deploy.sh: Deploy mode: using hostname=${KIN_OIDC_HOST} (port 443)"
     KIN_OFFICE_PREFIX="$(normalize_prefix "${KIN_OFFICE_PREFIX}")"
     if [[ -z "${KIN_OFFICE_PREFIX}" ]]; then
         echo "deploy.sh: ERROR: KIN_OFFICE_PREFIX must not be /" >&2
@@ -743,13 +699,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     KIN_OFFICE_PUBLIC_URL="${KIN_PUBLIC_BASE_URL}${KIN_OFFICE_PREFIX}"
     NEXTCLOUD_ADMIN_USER="${NEXTCLOUD_ADMIN_USER:-admin}"
     NEXTCLOUD_ADMIN_PASSWORD="${NEXTCLOUD_ADMIN_PASSWORD:-K1nNextcloud2024!}"
-    # Default: OIDC on same host as public Kin (443). LAN/dev Kin on :9219: export KIN_OIDC_DISCOVERY_PORT=9219
-    # (e.g. systemd drop-in) or set issuer=https://host:9219 in ${KIN_CONFIG_FILE}.
-    if [[ -n "${KIN_OIDC_DISCOVERY_PORT:-}" ]]; then
-        KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:${KIN_OIDC_DISCOVERY_PORT}/.well-known/openid-configuration"
-    else
-        KIN_OIDC_DISCOVERY_URI="${KIN_PUBLIC_BASE_URL}/.well-known/openid-configuration"
-    fi
+    KIN_OIDC_DISCOVERY_URI="${KIN_PUBLIC_BASE_URL}/.well-known/openid-configuration"
     KIN_OIDC_CLIENT_ID="kin-nextcloud"
     KIN_OIDC_CLIENT_SECRET="kin-nextcloud-secret"
     if KIN_OIDC_CONFIG=$(read_kin_oidc_config "${KIN_CONFIG_FILE}" 2>/dev/null); then
@@ -764,7 +714,6 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
             KIN_OIDC_CLIENT_SECRET="${cfg_client_secret}"
         fi
     fi
-    echo "deploy.sh: Deploy mode: hostname=${KIN_OIDC_HOST} discovery_uri=${KIN_OIDC_DISCOVERY_URI}"
     export KIN_OIDC_HOST
     export KIN_OFFICE_PREFIX
     export KIN_PUBLIC_BASE_URL
@@ -775,55 +724,43 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
 
     # Start Docker containers with network-callable hostname
     cd "${ROOT}"
-    # Same-host Kin: map public hostname to Docker host so Nextcloud can fetch OIDC discovery
-    # (avoids hairpin/NAT when the container uses https://<hostname>/...).
-    if [[ -f "${ROOT}/write-compose-host-overlay.sh" ]]; then
-        bash "${ROOT}/write-compose-host-overlay.sh" "${ROOT}" "${KIN_OIDC_HOST}"
-    fi
     export KIN_OIDC_HOST
-    # Detect docker compose command
+    maybe_write_compose_host_overlay "${ROOT}" "${KIN_OIDC_HOST}"
+
     if docker compose version >/dev/null 2>&1; then
         DOCKER_COMPOSE="docker compose"
-        COMPOSE_UP_WAIT=(--wait --timeout 180)
     elif command -v docker-compose >/dev/null 2>&1; then
         DOCKER_COMPOSE="docker-compose"
-        COMPOSE_UP_WAIT=()
-        echo "deploy.sh: WARNING: using docker-compose without --wait (Compose v2 plugin not installed)" >&2
     else
         echo "deploy.sh: ERROR: docker compose not found" >&2
         exit 1
     fi
-    deploy_compose_files=(-f docker-compose.yml)
+
+    compose_args=(-f docker-compose.yml)
     if [[ -f docker-compose.direct.yml ]]; then
-        deploy_compose_files+=(-f docker-compose.direct.yml)
+        compose_args+=(-f docker-compose.direct.yml)
     fi
     if [[ -f docker-compose.kin-deploy-host.yml ]]; then
-        deploy_compose_files+=(-f docker-compose.kin-deploy-host.yml)
+        compose_args+=(-f docker-compose.kin-deploy-host.yml)
     fi
-    # kin-office-wrapper.sh already runs compose up; skip here to avoid a second
-    # --wait (several minutes) on every service restart. Manual: unset
-    # KIN_OFFICE_SKIP_COMPOSE_UP or run deploy.sh from a shell without it.
+
     if [[ "${KIN_OFFICE_SKIP_COMPOSE_UP:-}" == "1" ]]; then
-        echo "deploy.sh: Skipping docker compose up (KIN_OFFICE_SKIP_COMPOSE_UP=1, containers already started)"
+        echo "deploy.sh: KIN_OFFICE_SKIP_COMPOSE_UP=1 — skipping docker compose up (containers assumed running)."
     else
-        echo "deploy.sh: Starting containers (docker compose up)..."
         if [[ -f docker-compose.direct.yml ]]; then
-            $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
+            $DOCKER_COMPOSE "${compose_args[@]}" up -d --build --wait --timeout 180 nextcloud onlyoffice onlyoffice-direct
         else
-            $DOCKER_COMPOSE "${deploy_compose_files[@]}" up -d "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
+            $DOCKER_COMPOSE "${compose_args[@]}" up -d --wait --timeout 180 nextcloud onlyoffice
         fi
     fi
 
     wait_for_nextcloud_occ
     ensure_nextcloud_installed "${NEXTCLOUD_ADMIN_USER}" "${NEXTCLOUD_ADMIN_PASSWORD}"
 
-    # Kin nginx uses "location ... ${prefix}/ { proxy_pass http://127.0.0.1:8081/; }" — the trailing
-    # slash strips the public prefix, so Apache sees /apps/... not ${prefix}/apps/... . RewriteBase must
-    # be "/" here; setting it to the public webroot breaks pretty URLs (404 on /apps/user_oidc/...).
-    # Browser-facing URLs still use overwritewebroot / overwritehost below.
-    echo "deploy.sh: Enabling Nextcloud htaccess (RewriteBase / for stripped reverse-proxy path)..."
+    # Enable .htaccess processing and bake the subpath into Nextcloud's rewrite base.
+    echo "deploy.sh: Enabling Nextcloud subpath routing for ${KIN_OFFICE_PREFIX}..."
     docker exec nextcloud sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf 2>/dev/null || true
-    docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "/" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ maintenance:update:htaccess 2>/dev/null || true
     docker exec nextcloud apache2ctl graceful 2>/dev/null || true
 
@@ -841,31 +778,15 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     # Nextcloud is installed; otherwise occ app/provider commands are ignored.
     echo "deploy.sh: Installing/enabling user_oidc app..."
     docker exec --user www-data nextcloud php occ app:install user_oidc 2>/dev/null || true
-    if ! docker exec --user www-data nextcloud php occ app:enable user_oidc; then
-        echo "deploy.sh: ERROR: user_oidc app could not be enabled (install from app store or check Nextcloud logs)" >&2
-        exit 1
-    fi
+    docker exec --user www-data nextcloud php occ app:enable user_oidc 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set user_oidc httpclient.allowselfsigned --type boolean --value true 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set user_oidc prompt --type string --value none 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends 2>/dev/null || true
+
     clear_nextcloud_bruteforce_state
-    select_oidc_discovery_uri_deploy_mode
-    echo "deploy.sh: Configuring user_oidc provider (${KIN_OIDC_DISCOVERY_URI})..."
-    docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
-    if ! docker exec --user www-data nextcloud php occ user_oidc:provider kin \
-        --discoveryuri="${KIN_OIDC_DISCOVERY_URI}" \
-        --clientid="${KIN_OIDC_CLIENT_ID}" \
-        --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
-        --unique-uid=0 \
-        --mapping-display-name="preferred_username"; then
-        echo "deploy.sh: WARNING: user_oidc:provider kin failed; OIDC login will not work until discovery succeeds (fix Kin, then: sudo systemctl reload kin-office)" >&2
-        if [[ "${KIN_OFFICE_STRICT_OIDC:-}" == "1" ]]; then
-            exit 1
-        fi
-    else
-        echo "deploy.sh: Note: user_oidc returns HTTP 404 on .../apps/user_oidc/login/N when discovery cannot be fetched from inside the nextcloud container (same as the 'Could not reach the OpenID Connect provider' page), not when nginx routing is wrong."
-    fi
+    select_oidc_discovery_uri_deploy_mode || true
     clear_nextcloud_bruteforce_state
+    register_user_oidc_kin_strict "${KIN_OIDC_DISCOVERY_URI}" || true
     if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
         echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
         docker exec --user www-data nextcloud php occ group:adduser admin "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null || true
@@ -974,13 +895,21 @@ if [[ -z "${NEXTCLOUD_ADMIN_PASSWORD}" ]]; then
   NEXTCLOUD_ADMIN_PASSWORD="kin-nextcloud-admin"
 fi
 
-export KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:9219/.well-known/openid-configuration"
+# LAN dev: default discovery on Kin TLS :9219. Override with KIN_OIDC_DISCOVERY_PORT or Kin [OIDC] issuer.
+if [[ -n "${KIN_OIDC_DISCOVERY_PORT:-}" ]]; then
+    export KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:${KIN_OIDC_DISCOVERY_PORT}/.well-known/openid-configuration"
+else
+    export KIN_OIDC_DISCOVERY_URI="https://${KIN_OIDC_HOST}:9219/.well-known/openid-configuration"
+fi
 
 # Get client_id and client_secret from Kin config, or use defaults
 KIN_OIDC_CLIENT_ID="kin-nextcloud"
 KIN_OIDC_CLIENT_SECRET="kin-nextcloud-secret"
 if [[ -n "${KIN_OIDC_CONFIG}" ]]; then
     IFS='|' read -r cfg_issuer cfg_client_id cfg_client_secret <<< "${KIN_OIDC_CONFIG}"
+    if [[ -n "${cfg_issuer}" ]]; then
+        export KIN_OIDC_DISCOVERY_URI="${cfg_issuer%/}/.well-known/openid-configuration"
+    fi
     if [[ -n "${cfg_client_id}" ]]; then
         KIN_OIDC_CLIENT_ID="${cfg_client_id}"
     fi
@@ -990,27 +919,39 @@ if [[ -n "${KIN_OIDC_CONFIG}" ]]; then
 fi
 
 cd "${ROOT}"
+maybe_write_compose_host_overlay "${ROOT}" "${KIN_OIDC_HOST}"
+
 # Detect docker compose command
 if docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE="docker compose"
-    COMPOSE_UP_WAIT=(--wait --timeout 180)
 elif command -v docker-compose >/dev/null 2>&1; then
     DOCKER_COMPOSE="docker-compose"
-    COMPOSE_UP_WAIT=()
-    echo "deploy.sh: WARNING: using docker-compose without --wait (Compose v2 plugin not installed)" >&2
 else
     echo "deploy.sh: ERROR: docker compose not found" >&2
     exit 1
 fi
+
+compose_args=(-f docker-compose.yml)
 if [[ -f docker-compose.direct.yml ]]; then
-  $DOCKER_COMPOSE -f docker-compose.yml -f docker-compose.direct.yml up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice onlyoffice-direct
-else
-  $DOCKER_COMPOSE up -d --build "${COMPOSE_UP_WAIT[@]}" nextcloud onlyoffice
+  compose_args+=(-f docker-compose.direct.yml)
 fi
+if [[ -f docker-compose.kin-deploy-host.yml ]]; then
+  compose_args+=(-f docker-compose.kin-deploy-host.yml)
+fi
+
+if [[ -f docker-compose.direct.yml ]]; then
+  $DOCKER_COMPOSE "${compose_args[@]}" up -d --build --wait --timeout 180 nextcloud onlyoffice onlyoffice-direct
+else
+  $DOCKER_COMPOSE "${compose_args[@]}" up -d --build --wait --timeout 180 nextcloud onlyoffice
+fi
+
+wait_for_nextcloud_occ
 
 # Enable .htaccess processing (AllowOverride) for Nextcloud routing
 echo "deploy.sh: Enabling .htaccess processing..."
 docker exec nextcloud sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf 2>/dev/null || true
+docker exec --user www-data nextcloud php occ config:system:set htaccess.RewriteBase --value "${KIN_OFFICE_PREFIX}" 2>/dev/null || true
+docker exec --user www-data nextcloud php occ maintenance:update:htaccess 2>/dev/null || true
 docker exec nextcloud apache2ctl graceful 2>/dev/null || true
 
 # === Prompt for Kin Nextcloud Admin User ===
@@ -1036,7 +977,7 @@ fi
 
 KIN_OIDC_CLIENT_SECRET="${KIN_OIDC_CLIENT_SECRET:-kin-nextcloud-secret}"
 
-echo "deploy.sh: Configuring Nextcloud OIDC with Kin at ${KIN_OIDC_HOST}:9219..."
+echo "deploy.sh: Configuring Nextcloud OIDC (Kin host ${KIN_OIDC_HOST}, discovery ${KIN_OIDC_DISCOVERY_URI})..."
 
 # 1. Proxy trust settings
 # Nextcloud expects the reverse proxy *IP* (CIDR or single address), not a Docker DNS name. Without this,
@@ -1076,15 +1017,11 @@ echo "deploy.sh: Installing/enabling user_oidc app..."
 docker exec --user www-data nextcloud php occ app:install user_oidc 2>/dev/null || true
 docker exec --user www-data nextcloud php occ app:enable user_oidc 2>/dev/null || true
 
-# 5. Configure OIDC provider (delete first if exists, then create)
-echo "deploy.sh: Configuring OIDC provider..."
-docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
-docker exec --user www-data nextcloud php occ user_oidc:provider kin \
-  --discoveryuri="https://${KIN_OIDC_HOST}:9219/.well-known/openid-configuration" \
-  --clientid="${KIN_OIDC_CLIENT_ID}" \
-  --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
-  --unique-uid=0 \
-  --mapping-display-name="preferred_username" 2>/dev/null || true
+# 5. Probe discovery from the container, then register provider (same path as --deploy-mode)
+clear_nextcloud_bruteforce_state
+select_oidc_discovery_uri_deploy_mode || true
+clear_nextcloud_bruteforce_state
+register_user_oidc_kin_strict "${KIN_OIDC_DISCOVERY_URI}" || true
 
 # 6. Add Kin admin user to Nextcloud admin group
 echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."

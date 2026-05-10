@@ -9,7 +9,7 @@ Set up Nextcloud to run in Docker and expose it through Kin's nginx reverse prox
 - Always assume existing data is precious and should be preserved
 - When in doubt, ask before making destructive changes
 - **DO NOT modify docker-compose.yml** - The onlyoffice container is required for the DocumentServer that the Nextcloud OnlyOffice app connects to
-- **DO NOT modify deploy.sh** - The OnlyOffice app installation via occ is not the right way; onlyoffice docker container provides the DocumentServer
+- **deploy.sh** - Keep changes focused on bootstrap (compose, OIDC, nginx snippets). Do not replace the OnlyOffice **container** with app-store hacks; the Document Server still comes from Docker. Prefer small, reviewed edits over drive-by refactors.
 - **OnlyOffice app** - The Nextcloud app itself is installed from Nextcloud's App Store (`/settings/apps`), not via docker or deploy.sh
 - **Keep docker-compose.yml and .config.ini in sync** - Changing NEXTCLOUD_ADMIN_PASSWORD in one requires changing in both, or Nextcloud will be stuck in retry loop on restart
 - **Recreate containers only, not volumes** - Use `docker compose rm -f <service>` followed by `docker compose up -d <service>`, never `docker compose down -v`
@@ -45,7 +45,7 @@ Kin nginx (:9219/kin-office) <------------------- Nextcloud
 
 ### Kin Apps
 - Each app uses **`manifest.json` `entry`: `main.js`**, which opens the UI via **`kin.classes.Window`** and a view script (**`app.js`**) under **`/application.html`** (see main Kin repo `docs/how_to_write_kinapp.md`). Do not use per-package **`index.html`** as the primary entry.
-- `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app. If OpenID discovery fails, the app shows an **on-screen** panel (not only console) with **Retry** and **Use local Nextcloud login** (`/index.php/login?direct=1`). Open the app with **`?nextcloud_direct=1`** on the Kin URL to skip OIDC on first load (admin local login).
+- `repository/Applications/Internet/kinnextcloud/` - main Nextcloud browser app
 - `repository/Applications/Office/kinonlyoffice_documents/` - launcher for new text documents
 - `repository/Applications/Office/kinonlyoffice_spreadsheets/` - launcher for new spreadsheets
 - `repository/Applications/Office/kinonlyoffice_presentations/` - launcher for new presentations
@@ -93,13 +93,12 @@ docker compose up -d --build
 # Build and install kinnextcloud app to Kin
 ./build-apps.sh
 
-# Build .deb package (installs to /opt/kin/modules/kin-office/). Bump the **top** version in `debian/changelog` before each release so `apt upgrade` installs the new build; `make-debian.sh` uses that version as-is. On `dpkg --configure`, postinst copies Kin apps and **starts or restarts** `kin-office.service` so `deploy.sh --deploy-mode` runs without manual steps.
+# Build .deb package (installs to /opt/kin/modules/kin-office/)
 ./make-debian.sh
 
 # Manage service (after installing .deb)
 sudo systemctl start|stop|restart|reload kin-office
 sudo service kin-office start|stop|restart|reload
-# First start: large image pulls and compose --wait can take several minutes; use `journalctl -u kin-office -f` for live output.
 
 # Deploy mode: read hostname from /etc/kin/config.ini, use port 443
 ./deploy.sh --deploy-mode
@@ -117,7 +116,11 @@ All configuration is handled automatically by `deploy.sh`. On first run, it:
 
 For manual overrides, the following can be set in `.config.ini`:
 
-**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`. Nextcloud’s public URL is **https://hostname/kin-office/** (443). OIDC discovery starts from **`issuer=`** (if set), else **`KIN_OIDC_DISCOVERY_PORT`**, else **https://hostname/.well-known/openid-configuration**. Deploy then **probes from inside the `nextcloud` container** that URL plus **https://hostname:9219/...** and **https://host.docker.internal:9219/...**, and registers **`user_oidc`** with the **first** response that is valid OIDC JSON (so admins need not guess which port Kin uses when both are possible).
+**Deploy mode** (`--deploy-mode`): Reads hostname from `/etc/kin/config.ini` `[KinCore] hostname=`, uses port 443 (HTTPS). Designed for production .deb installs where Kin runs behind Nginx on standard HTTPS port. The `kin-office.service` systemd service runs deploy mode automatically on start/reload.
+
+**Kin-side preflight (packaged stack):** Before debugging kin-office scripts, confirm Kin nginx and `[OIDC] issuer` match what the Nextcloud container can reach. Use the checklist in the Kin repo: [`docs/deployment.md` — *Kin + kin-office preflight (packaged stack)*](../kin/docs/deployment.md#kin--kin-office-preflight-packaged-stack). If discovery never returns JSON from inside `nextcloud`, fix Kin (443 `location /`, `kin-modules` include, `systemctl restart kin`) first — kin-office cannot invent a reachable IdP.
+
+**Strict OIDC:** Set `KIN_OFFICE_STRICT_OIDC=1` (environment) so `deploy.sh` exits non-zero when `occ user_oidc:provider` fails after discovery probes.
 
 ```ini
 KIN_BUILD_PATH=/home/hogne/Projects/Aurae/kin/build
@@ -186,31 +189,15 @@ assign Nextcloud: Home:.Mounts/nextcloud
 3. Open `Mountlist:` in Kin file dialogs and verify `Nextcloud:` appears.
 4. OnlyOffice launcher menus (`Open`, `Save`, `Save As`) then work against `Nextcloud:` paths.
 
+### OIDC / discovery troubleshooting
+
+- **“Could not reach the OpenID Connect provider”** (or `user_oidc` login routes returning **404**) usually means Nextcloud **inside Docker** cannot HTTP-fetch discovery — not that the browser cannot open `/kin-office/`. Treat it as a **Kin reachability** problem first (see preflight link above), then `docker-compose.kin-deploy-host.yml` / `write-compose-host-overlay.sh` and `deploy.sh` logs.
+- **LAN / dev (`./deploy.sh` without `--deploy-mode`)** uses the same discovery **probes** as deploy mode after containers are up. With a DNS-like `KIN_OIDC_HOST`, deploy may generate `docker-compose.kin-deploy-host.yml` so the hostname resolves to `host-gateway`.
+
 ### LAN troubleshooting
 
 - If the app opens but browser shows host unreachable, verify the hostname resolves to the server LAN IP.
 - Self-signed cert host verification can block access when hostname/IP does not match the cert.
-- **Nextcloud “Could not reach the OpenID Connect provider”** means the **Nextcloud PHP stack** cannot HTTP-fetch Kin’s discovery URL from **inside** the `nextcloud` container (nginx `/kin-office/` can still work — that is a separate hop to `127.0.0.1:8081`). Packaged deploy writes `docker-compose.kin-deploy-host.yml` so `<hostname>` from `/etc/kin/config.ini` resolves to `host-gateway` for that container. If `kin-office.service` never completed `deploy.sh --deploy-mode` (check `journalctl -u kin-office`), OIDC may be unset; deploy used to hide `occ user_oidc:provider` failures — fixed to fail loud and probe discovery before registering the provider.
-
-### kinnextcloud console messages (typical order)
-
-1. **`[kinnextcloud] Opening Nextcloud at: …/kin-office/index.php/login`** — The workspace app loads the iframe at the canonical login entry (good).
-
-2. **`GET …/kin-office/apps/user_oidc/login/1` → 404** — The browser follows Nextcloud’s redirect to the **user_oidc** login route for provider id **1**. A **404** here can mean:
-   - **Often (packaged Kin):** **user_oidc** itself answers **HTTP 404** when discovery fails or the provider id is unknown (see `LoginController` in [nextcloud/user_oidc](https://github.com/nextcloud/user_oidc) — same status as the “Could not reach…” / “no such provider” pages). That is **not** proof that Kin’s IdP JSON is wrong **before** you rule out routing: it *is* consistent with **discovery unreachable from the container**.
-   - **Also possible:** reverse proxy never forwards `/kin-office/` to `127.0.0.1:8081`, wrong `overwritewebroot` / `htaccess.RewriteBase`, app disabled, etc. Use response **body** (Nextcloud error UI vs plain nginx 404) to tell them apart.
-
-3. **`kin-bridge` rewrite → `…/index.php/apps/user_oidc/login/1` → 404** — The bridge forces the front-controller URL when the pretty path is used. **If discovery still fails, this URL also 404s** for the same app-level reason as (2), not necessarily because nginx cannot run `index.php`.
-
-4. **`user_oidc: Nextcloud cannot fetch OIDC discovery…`** — Scripted diagnosis: page text matches the discovery failure case, or deploy never registered a working discovery URL. Deploy **probes** several discovery URLs from inside `nextcloud` (configured URL, `https://<host>/.well-known/…`, `:9219`, `host.docker.internal:9219`) and registers **`user_oidc`** with the first that returns **2xx + JSON with `issuer`**.
-
-5. **`[kinnextcloud] OIDC setup: …`** — The parent app logs the iframe `postMessage` from kin-bridge (`kinBridgeError` / `user_oidc_discovery`).
-
-The **`app.js?v=…`** hash is the **Kin workspace asset id** for that build; it does not explain 404 vs 200 by itself.
-
-**Checks:** from the `nextcloud` container, `curl -kSsS` each discovery candidate; on the host, confirm **443** (and **9219** if used) serves `/.well-known/openid-configuration` with a valid OIDC document; `docker exec --user www-data nextcloud php occ user_oidc:provider kin` (output) after deploy; compare `overwritehost` / `overwritewebroot` / `overwrite.cli.url` with how Kin nginx strips `/kin-office/` before `proxy_pass`.
-
-**Brute-force lockouts:** `deploy.sh --deploy-mode` runs **`clear_nextcloud_bruteforce_state`** (before and after OIDC provider setup): `occ security:bruteforce:reset` for loopback, Docker gateway, host `hostname -I` addresses, IPv4s parsed from recent `nextcloud.log` bruteforce lines, and **`DELETE` from `oc_bruteforce_attempts`** for default SQLite DB filenames — no manual `occ security:bruteforce:reset <ip>` for routine Kin-office upgrades. (Redis-only bruteforce backends may still need vendor-specific handling.)
 
 ## Differences from kinoffice (OwnCloud)
 

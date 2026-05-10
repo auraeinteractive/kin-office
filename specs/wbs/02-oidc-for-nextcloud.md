@@ -172,6 +172,8 @@ Using runbook-only (simplest):
 
 ### Phase D — Cross-network correctness (blocking “done”)
 
+**Operator preflight (Kin + nginx):** See sibling Kin repo [`docs/deployment.md` — *Kin + kin-office preflight (packaged stack)*](../../../kin/docs/deployment.md#kin--kin-office-preflight-packaged-stack). If discovery is unreachable from the `nextcloud` container, fix Kin’s TLS site (`location /` → Kin HTTP, `include /etc/nginx/kin-modules/*.conf;`, `[OIDC] issuer` / `systemctl restart kin`) before changing kin-office app code — this repo only consumes the IdP.
+
 Nextcloud may block outbound requests to **localhost** when fetching OIDC discovery from inside Docker (`LocalServerException: violates local access rules`).
 
 **Tasks**
