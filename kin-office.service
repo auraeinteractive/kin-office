@@ -6,6 +6,7 @@ Requires=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+# Optional LAN Kin on workspace TLS: Environment=KIN_OIDC_DISCOVERY_PORT=9219
 # Pulls / healthchecks can exceed the default start timeout; image first-pull can take many minutes.
 TimeoutStartSec=2400
 ExecStart=/opt/kin/modules/kin-office/kin-office-wrapper.sh
