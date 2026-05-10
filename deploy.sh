@@ -279,6 +279,8 @@ location ^~ ${prefix}/direct/ {
 }
 
 location ^~ ${prefix}/ {
+    # Pretty URL /apps/user_oidc/login/N can 404 behind stripped proxy + Apache rewrites; front controller always works.
+    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     include snippets/proxy-common.conf;
     include snippets/proxy-websocket.conf;
@@ -415,6 +417,7 @@ location ^~ ${prefix}/direct/ {
 }
 
 location ^~ ${prefix}/ {
+    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;
@@ -538,6 +541,7 @@ location ^~ ${prefix}/ds/ {
 }
 
 location ^~ ${prefix}/ {
+    rewrite ^${prefix}/apps/user_oidc/login(.*)$ ${prefix}/index.php/apps/user_oidc/login\$1 break;
     proxy_pass http://127.0.0.1:8081/;
     proxy_set_header Host \$host;
     proxy_set_header X-Real-IP \$remote_addr;

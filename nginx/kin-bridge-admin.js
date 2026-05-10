@@ -697,8 +697,30 @@
         return true;
     }
 
+    // Pretty /apps/user_oidc/login/N can 404 when Apache RewriteBase disagrees with stripped proxy path;
+    // /index.php/apps/... always routes (nginx deploy may also rewrite — this helps older configs).
+    function fixUserOidcFrontControllerUrl() {
+        var p = window.location.pathname || '';
+        if (p.indexOf('/apps/user_oidc/login') === -1) {
+            return false;
+        }
+        if (p.indexOf('/index.php/apps/user_oidc') !== -1) {
+            return false;
+        }
+        var j = p.indexOf('/apps/user_oidc/login');
+        var prefix = p.slice(0, j);
+        var rest = p.slice(j);
+        var fixedPath = prefix + '/index.php' + rest;
+        log('Rewriting user_oidc URL to front controller', p, '->', fixedPath);
+        window.location.replace(window.location.origin + fixedPath + window.location.search + window.location.hash);
+        return true;
+    }
+
     function handleUrlChange() {
         if (fixUserOidcMangledUrl()) {
+            return;
+        }
+        if (fixUserOidcFrontControllerUrl()) {
             return;
         }
         var status = getStatus();
@@ -736,6 +758,9 @@
 
     function init() {
         if (fixUserOidcMangledUrl()) {
+            return;
+        }
+        if (fixUserOidcFrontControllerUrl()) {
             return;
         }
         var status = getStatus();
