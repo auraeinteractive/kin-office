@@ -181,6 +181,27 @@ ensure_nextcloud_installed() {
     --admin-pass "${admin_password}"
 }
 
+# Deploy mode: fail fast if the nextcloud container cannot reach Kin OIDC discovery
+# (otherwise user_oidc shows "Could not reach the OpenID Connect provider" with no deploy error).
+verify_oidc_discovery_from_nextcloud() {
+  local uri="$1"
+  echo "deploy.sh: Verifying OIDC discovery from nextcloud container: ${uri}"
+  if docker exec nextcloud sh -c 'command -v curl >/dev/null 2>&1'; then
+    if docker exec -e "DISCOVERY_URI=${uri}" nextcloud sh -c 'curl -kSfS --max-time 25 -o /dev/null "$DISCOVERY_URI"'; then
+      echo "deploy.sh: OIDC discovery URL is reachable from the nextcloud container"
+      return 0
+    fi
+    echo "deploy.sh: ERROR: curl from nextcloud container could not fetch discovery (see curl output above)" >&2
+    exit 1
+  fi
+  if ! docker exec -e "DISCOVERY_URI=${uri}" --user www-data nextcloud php -r '$u=getenv("DISCOVERY_URI"); $c=@file_get_contents($u,false,stream_context_create(["http"=>["timeout"=>25],"ssl"=>["verify_peer"=>false,"verify_peer_name"=>false]])); if ($c===false || strpos($c,"issuer")===false) { fwrite(STDERR,"deploy.sh: discovery fetch failed or response is not OIDC JSON\n"); exit(1);}'; then
+    echo "deploy.sh: ERROR: could not load OIDC discovery from inside nextcloud (TLS, DNS, hairpin, or wrong URL)" >&2
+    echo "deploy.sh: Hint: same-host Kin needs docker-compose.kin-deploy-host.yml (see write-compose-host-overlay.sh)" >&2
+    exit 1
+  fi
+  echo "deploy.sh: OIDC discovery URL is reachable from the nextcloud container (php probe)"
+}
+
 write_kin_nginx_module() {
   local kin_build_path="$1"
   local prefix="$2"
@@ -683,18 +704,25 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     # Nextcloud is installed; otherwise occ app/provider commands are ignored.
     echo "deploy.sh: Installing/enabling user_oidc app..."
     docker exec --user www-data nextcloud php occ app:install user_oidc 2>/dev/null || true
-    docker exec --user www-data nextcloud php occ app:enable user_oidc 2>/dev/null || true
-    echo "deploy.sh: Configuring user_oidc provider (${KIN_OIDC_DISCOVERY_URI})..."
+    if ! docker exec --user www-data nextcloud php occ app:enable user_oidc; then
+        echo "deploy.sh: ERROR: user_oidc app could not be enabled (install from app store or check Nextcloud logs)" >&2
+        exit 1
+    fi
     docker exec --user www-data nextcloud php occ config:system:set user_oidc httpclient.allowselfsigned --type boolean --value true 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set user_oidc prompt --type string --value none 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends 2>/dev/null || true
+    verify_oidc_discovery_from_nextcloud "${KIN_OIDC_DISCOVERY_URI}"
+    echo "deploy.sh: Configuring user_oidc provider (${KIN_OIDC_DISCOVERY_URI})..."
     docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
-    docker exec --user www-data nextcloud php occ user_oidc:provider kin \
+    if ! docker exec --user www-data nextcloud php occ user_oidc:provider kin \
         --discoveryuri="${KIN_OIDC_DISCOVERY_URI}" \
         --clientid="${KIN_OIDC_CLIENT_ID}" \
         --clientsecret="${KIN_OIDC_CLIENT_SECRET}" \
         --unique-uid=0 \
-        --mapping-display-name="preferred_username" 2>/dev/null || true
+        --mapping-display-name="preferred_username"; then
+        echo "deploy.sh: ERROR: user_oidc:provider kin failed (discovery URI, client id/secret, or occ output above)" >&2
+        exit 1
+    fi
     if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
         echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
         docker exec --user www-data nextcloud php occ group:adduser admin "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null || true
