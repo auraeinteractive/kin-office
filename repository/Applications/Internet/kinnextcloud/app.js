@@ -44,6 +44,16 @@
         iframeEl.src = iframeSrc;
         document.body.appendChild(iframeEl);
 
+        window.addEventListener('message', function(ev) {
+            var d = ev.data;
+            if (!d || typeof d !== 'object') {
+                return;
+            }
+            if (d.type === 'kinBridgeError' && d.action === 'user_oidc_discovery') {
+                log('OIDC setup:', d.error || d);
+            }
+        });
+
         log('Opening Nextcloud at:', iframeSrc, '(header visible by default)');
     }
 

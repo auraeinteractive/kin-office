@@ -105,6 +105,27 @@
         );
     }
 
+    // user_oidc LoginController returns HTTP 404 + error template when discovery fails or provider id is invalid.
+    function detectUserOidcHttpErrorPage() {
+        var p = window.location.pathname || '';
+        if (p.indexOf('user_oidc') === -1) {
+            return null;
+        }
+        var text = '';
+        try {
+            text = (document.body && document.body.innerText) ? document.body.innerText : '';
+        } catch (_e) {
+            return null;
+        }
+        if (text.indexOf('Could not reach the OpenID Connect provider') !== -1) {
+            return 'Nextcloud cannot fetch OIDC discovery from the URL configured for provider "kin" (from inside the nextcloud container). Fix Kin /.well-known on 443, host-gateway overlay, or KIN_OIDC_DISCOVERY_PORT; then sudo systemctl restart kin-office.';
+        }
+        if (text.indexOf('There is no such OpenID Connect provider') !== -1) {
+            return 'No OIDC provider with that id — run deploy (user_oidc:provider kin) or check Nextcloud admin → OpenID Connect.';
+        }
+        return null;
+    }
+
     function getStatus() {
         var user = getLoggedInUser();
         var loginPage = isLoginPage();
@@ -729,6 +750,16 @@
 
         ensureToolbarHidden();
 
+        var oidcNavErr = detectUserOidcHttpErrorPage();
+        if (oidcNavErr) {
+            log('user_oidc:', oidcNavErr);
+            postToParent({
+                type: 'kinBridgeError',
+                action: 'user_oidc_discovery',
+                error: oidcNavErr
+            });
+        }
+
         if (status.isLoggedIn) {
             postToParent({
                 type: 'kinBridgeStatusChange',
@@ -766,6 +797,16 @@
         var status = getStatus();
         log('Init on', window.location.href);
         log('isLoggedIn:', status.isLoggedIn, 'isLoginPage:', status.isLoginPage, 'user:', status.currentUser);
+
+        var oidcErr = detectUserOidcHttpErrorPage();
+        if (oidcErr) {
+            log('user_oidc:', oidcErr);
+            postToParent({
+                type: 'kinBridgeError',
+                action: 'user_oidc_discovery',
+                error: oidcErr
+            });
+        }
 
         ensureToolbarHidden();
 

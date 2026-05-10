@@ -758,6 +758,8 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
         if [[ "${KIN_OFFICE_STRICT_OIDC:-}" == "1" ]]; then
             exit 1
         fi
+    else
+        echo "deploy.sh: Note: user_oidc returns HTTP 404 on .../apps/user_oidc/login/N when discovery cannot be fetched from inside the nextcloud container (same as the 'Could not reach the OpenID Connect provider' page), not when nginx routing is wrong."
     fi
     if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
         echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
