@@ -1,3 +1,11 @@
+kin-office (1.0.3-1) stable; urgency=medium
+
+  * postinst: start or restart kin-office on configure so deploy.sh runs after every install/upgrade.
+  * packaging: package Version is taken from this changelog (no separate autobump).
+  * OIDC/subpath: deploy, nginx rewrites, kin-bridge, kinnextcloud fixes.
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 12:00:00 +0000
+
 kin-office (1.0.0-1) stable; urgency=low
 
   * Initial release.

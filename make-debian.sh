@@ -13,22 +13,13 @@ if ! command -v dpkg-deb >/dev/null 2>&1; then
 	exit 1
 fi
 
-# Version: read from debian/changelog and increment build number
+# Version: top entry in debian/changelog (Debian "upstream-version" or "upstream-version-debian-revision").
+# Bump that file before each release so apt upgrade sees a newer package (e.g. 1.0.3-1 > 1.0.1).
 if [[ -f "$ROOT/debian/changelog" ]]; then
-    CURRENT="$(head -1 "$ROOT/debian/changelog" | sed -n 's/.*(\([^)]*\)).*/\1/p')"
-    # Remove debian revision (e.g., 1.0.0-1 -> 1.0.0)
-    BASE="${CURRENT%-*}"
-    # Extract major.minor and build number (e.g., 1.0.0 -> major.minor=1.0, build=0)
-    if [[ "$BASE" =~ ^([0-9]+\.[0-9]+)\.([0-9]+)$ ]]; then
-        MAJOR_MINOR="${BASH_REMATCH[1]}"
-        BUILD="${BASH_REMATCH[2]}"
-        BUILD=$((BUILD + 1))
-        VERSION="${MAJOR_MINOR}.${BUILD}"
-    else
-        VERSION="1.0.1"
-    fi
-else
-    VERSION="1.0.1"
+    VERSION="$(head -1 "$ROOT/debian/changelog" | sed -n 's/.*(\([^)]*\)).*/\1/p')"
+fi
+if [[ -z "${VERSION:-}" ]]; then
+    VERSION="0.0.0-1"
 fi
 
 if command -v dpkg-architecture >/dev/null 2>&1; then
@@ -100,10 +91,19 @@ mkdir -p "$STAGE/DEBIAN"
 cat >"$STAGE/DEBIAN/postinst" <<'POSTINST'
 #!/bin/bash
 set -e
+
+case "$1" in
+    configure) ;;
+    abort-upgrade|abort-deconfigure|abort-remove) exit 0 ;;
+    *) exit 0 ;;
+esac
+
 mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
+chmod 755 /opt/kin/modules/kin-office/write-compose-host-overlay.sh 2>/dev/null || true
+chmod 755 /opt/kin/modules/kin-office/kin-office-wrapper.sh 2>/dev/null || true
 # Install Kin apps into the runtime repository used by deployed Kin.
 if [ -d /opt/kin/modules/kin-office/repository/Applications ]; then
     mkdir -p /usr/lib/kin/repository/Applications
@@ -113,9 +113,27 @@ fi
 if [ -f /lib/systemd/system/kin-office.service ]; then
     cp /lib/systemd/system/kin-office.service /etc/systemd/system/kin-office.service 2>/dev/null || true
 fi
-systemctl daemon-reload 2>/dev/null || true
-systemctl enable kin-office.service 2>/dev/null || true
-# Do NOT run deploy or start service here - wrapper handles it on service start
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable kin-office.service 2>/dev/null || true
+    # First install and upgrades: run the unit so kin-office-wrapper + deploy.sh apply nginx/Nextcloud/OIDC.
+    # Do not fail apt if Docker is not ready yet (admin can: sudo systemctl start kin-office).
+    set +e
+    if systemctl is-active --quiet kin-office.service 2>/dev/null; then
+        systemctl restart kin-office.service
+        rc=$?
+    else
+        systemctl start kin-office.service
+        rc=$?
+    fi
+    set -e
+    if [ "$rc" != 0 ]; then
+        echo "kin-office: systemctl returned $rc (often Docker not running). When ready: sudo systemctl start kin-office" >&2
+    fi
+else
+    echo "kin-office: systemd not available; start manually after boot: sudo systemctl start kin-office" >&2
+fi
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
 

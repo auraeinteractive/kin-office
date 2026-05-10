@@ -93,7 +93,7 @@ docker compose up -d --build
 # Build and install kinnextcloud app to Kin
 ./build-apps.sh
 
-# Build .deb package (installs to /opt/kin/modules/kin-office/)
+# Build .deb package (installs to /opt/kin/modules/kin-office/). Bump the **top** version in `debian/changelog` before each release so `apt upgrade` installs the new build; `make-debian.sh` uses that version as-is. On `dpkg --configure`, postinst copies Kin apps and **starts or restarts** `kin-office.service` so `deploy.sh --deploy-mode` runs without manual steps.
 ./make-debian.sh
 
 # Manage service (after installing .deb)
