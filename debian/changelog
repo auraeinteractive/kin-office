@@ -1,3 +1,9 @@
+kin-office (1.0.5-1) stable; urgency=low
+
+  * kin-bridge: clearer OIDC discovery failure hint (multi-port deploy probe).
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 20:00:00 +0000
+
 kin-office (1.0.4-1) stable; urgency=medium
 
   * deploy: probe OIDC discovery from the nextcloud container against several URLs
