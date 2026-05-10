@@ -118,7 +118,7 @@
             return null;
         }
         if (text.indexOf('Could not reach the OpenID Connect provider') !== -1) {
-            return 'Nextcloud cannot fetch OIDC discovery for provider "kin" from inside the nextcloud container. Ensure Kin serves TLS /.well-known/openid-configuration (deploy tries 443 and :9219). Then: sudo systemctl restart kin-office.';
+            return 'Nextcloud cannot fetch OIDC discovery for provider "kin" from inside the nextcloud container. Kin must serve TLS /.well-known/openid-configuration (deploy tries 443 and :9219). Reinstall/restart kin-office to re-run deploy; login throttles are cleared automatically on deploy.';
         }
         if (text.indexOf('There is no such OpenID Connect provider') !== -1) {
             return 'No OIDC provider with that id — run deploy (user_oidc:provider kin) or check Nextcloud admin → OpenID Connect.';

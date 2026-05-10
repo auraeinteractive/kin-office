@@ -264,6 +264,65 @@ verify_oidc_discovery_from_nextcloud() {
   return 0
 }
 
+# Nextcloud throttles logins after failed attempts; OIDC/discovery debugging triggers this often.
+# Reset without admin manual steps: occ per-IP for common proxies + IPs seen in nextcloud.log, then
+# SQLite DELETE for default docker-compose installs (table may be absent — ignore errors).
+clear_nextcloud_bruteforce_state() {
+  if ! docker exec nextcloud sh -c 'test -f /var/www/html/occ' 2>/dev/null; then
+    return 0
+  fi
+  echo "deploy.sh: Clearing Nextcloud brute-force throttles (automated)..."
+  reset_bf_ip() {
+    local x="${1:-}"
+    [[ -z "${x}" ]] && return 0
+    docker exec --user www-data nextcloud php occ security:bruteforce:reset "${x}" 2>/dev/null || true
+  }
+  reset_bf_ip 127.0.0.1
+  reset_bf_ip "::1"
+  local gw
+  gw="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' nextcloud 2>/dev/null | awk 'NF {print; exit}')"
+  reset_bf_ip "${gw}"
+  local hip
+  if read -r -a hip <<< "$(hostname -I 2>/dev/null)"; then
+    for ip in "${hip[@]}"; do
+      reset_bf_ip "${ip}"
+    done
+  fi
+  local logf
+  logf="$(docker exec --user www-data nextcloud php occ config:system:get logfile 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ -z "${logf}" ]]; then
+    logf="/var/www/html/data/nextcloud.log"
+  fi
+  if docker exec nextcloud test -f "${logf}" 2>/dev/null; then
+    local _bfips
+    _bfips="$(docker exec -e "LOGF=${logf}" nextcloud sh -c 'grep -hE "Bruteforce attempt|IP address throttled|IP address blocked" "${LOGF}" 2>/dev/null | tail -n 800' | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | sort -u || true)"
+    while IFS= read -r ip; do
+      [[ -n "${ip}" ]] && reset_bf_ip "${ip}"
+    done <<< "${_bfips}"
+  fi
+  local nc_dd nc_pfx
+  nc_dd="$(docker exec --user www-data nextcloud php occ config:system:get datadirectory 2>/dev/null | tr -d '\r\n' || true)"
+  nc_dd="${nc_dd:-/var/www/html/data}"
+  nc_pfx="$(docker exec --user www-data nextcloud php occ config:system:get dbtableprefix 2>/dev/null | tr -d '\r\n' || true)"
+  nc_pfx="${nc_pfx:-oc_}"
+  docker exec -e "NC_DD=${nc_dd}" -e "NC_PFX=${nc_pfx}" --user www-data nextcloud php -r '
+$dd = getenv("NC_DD") ?: "/var/www/html/data";
+$prefix = getenv("NC_PFX") ?: "oc_";
+$table = $prefix . "bruteforce_attempts";
+foreach (["nextcloud.db", "owncloud.db", "database.sqlite"] as $fn) {
+    $path = $dd . "/" . $fn;
+    if (!is_file($path)) {
+        continue;
+    }
+    try {
+        $pdo = new PDO("sqlite:" . $path, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        $pdo->exec("DELETE FROM " . $table);
+    } catch (Throwable $e) {
+    }
+}
+' 2>/dev/null || true
+}
+
 write_kin_nginx_module() {
   local kin_build_path="$1"
   local prefix="$2"
@@ -789,6 +848,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     docker exec --user www-data nextcloud php occ config:system:set user_oidc httpclient.allowselfsigned --type boolean --value true 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:system:set user_oidc prompt --type string --value none 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:set --type=string --value=0 user_oidc allow_multiple_user_backends 2>/dev/null || true
+    clear_nextcloud_bruteforce_state
     select_oidc_discovery_uri_deploy_mode
     echo "deploy.sh: Configuring user_oidc provider (${KIN_OIDC_DISCOVERY_URI})..."
     docker exec --user www-data nextcloud php occ user_oidc:provider kin --delete 2>/dev/null || true
@@ -805,6 +865,7 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     else
         echo "deploy.sh: Note: user_oidc returns HTTP 404 on .../apps/user_oidc/login/N when discovery cannot be fetched from inside the nextcloud container (same as the 'Could not reach the OpenID Connect provider' page), not when nginx routing is wrong."
     fi
+    clear_nextcloud_bruteforce_state
     if [[ -n "${KIN_NEXTCLOUD_ADMIN_USER:-}" ]]; then
         echo "deploy.sh: Adding ${KIN_NEXTCLOUD_ADMIN_USER} to Nextcloud admin group..."
         docker exec --user www-data nextcloud php occ group:adduser admin "${KIN_NEXTCLOUD_ADMIN_USER}" 2>/dev/null || true

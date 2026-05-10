@@ -210,6 +210,8 @@ The **`app.js?v=…`** hash is the **Kin workspace asset id** for that build; it
 
 **Checks:** from the `nextcloud` container, `curl -kSsS` each discovery candidate; on the host, confirm **443** (and **9219** if used) serves `/.well-known/openid-configuration` with a valid OIDC document; `docker exec --user www-data nextcloud php occ user_oidc:provider kin` (output) after deploy; compare `overwritehost` / `overwritewebroot` / `overwrite.cli.url` with how Kin nginx strips `/kin-office/` before `proxy_pass`.
 
+**Brute-force lockouts:** `deploy.sh --deploy-mode` runs **`clear_nextcloud_bruteforce_state`** (before and after OIDC provider setup): `occ security:bruteforce:reset` for loopback, Docker gateway, host `hostname -I` addresses, IPv4s parsed from recent `nextcloud.log` bruteforce lines, and **`DELETE` from `oc_bruteforce_attempts`** for default SQLite DB filenames — no manual `occ security:bruteforce:reset <ip>` for routine Kin-office upgrades. (Redis-only bruteforce backends may still need vendor-specific handling.)
+
 ## Differences from kinoffice (OwnCloud)
 
 | Aspect | kinoffice (OwnCloud) | nextcloud |

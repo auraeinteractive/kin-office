@@ -1,3 +1,13 @@
+kin-office (1.0.7-1) stable; urgency=medium
+
+  * deploy: clear Nextcloud brute-force throttles automatically on each
+    deploy-mode run (occ reset for common IPs + log-derived IPv4 + SQLite
+    DELETE for default sqlite installs) so OIDC/login debugging needs no
+    manual occ commands.
+  * kin-bridge: OIDC error copy mentions auto throttle clear on deploy.
+
+ -- Kin <packages@os-kin.com>  Sun, 11 May 2026 14:00:00 +0000
+
 kin-office (1.0.6-1) stable; urgency=medium
 
   * kinnextcloud: visible OIDC failure panel with local-login and retry; URL
