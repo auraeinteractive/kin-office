@@ -285,7 +285,8 @@ location ^~ ${prefix}/ {
     proxy_set_header X-Forwarded-Prefix ${prefix};
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    proxy_cookie_path / ${prefix}/;
+    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
+    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
@@ -427,7 +428,8 @@ location ^~ ${prefix}/ {
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    proxy_cookie_path / ${prefix}/;
+    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
+    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
@@ -549,7 +551,8 @@ location ^~ ${prefix}/ {
     proxy_set_header Connection \$http_connection;
     proxy_set_header Accept-Encoding "";
     proxy_force_ranges on;
-    proxy_cookie_path / ${prefix}/;
+    # Do not set proxy_cookie_path: Nextcloud overwritewebroot already prefixes cookie Path;
+    # rewriting / → ${prefix}/ here produced Path=/kin-office/kin-office and broke app routes.
     proxy_cookie_flags ~ secure samesite=none;
 
     sub_filter_once off;
