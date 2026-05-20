@@ -64,6 +64,9 @@ install_to_kin() {
     echo "Copying files with verbose rsync..."
     rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/"
     echo "Apps installed to Kin build."
+    # `kinonlyoffice_*` are real package ids in this tree. The Kin repo workspace must not
+    # rewrite them to `remote_onlyoffice` in clients/workspace/scripts/base.js:normalizeRepoPackageId
+    # or the app menu will open the wrong package after rsync.
 }
 
 load_config
@@ -88,7 +91,7 @@ if [ -d "$SOURCE_DIR" ]; then
     echo "Source: $SOURCE_DIR"
     echo "Destination: $BUILD_DIR"
     echo "Copying files..."
-    rsync -av "$SOURCE_DIR/" "$BUILD_DIR/"
+    rsync -av --delete "$SOURCE_DIR/" "$BUILD_DIR/"
     echo "Done. Apps built to $BUILD_DIR"
 else
     echo "Error: No repository directory found at $SOURCE_DIR"

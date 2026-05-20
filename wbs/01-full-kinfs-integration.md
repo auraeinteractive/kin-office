@@ -3,6 +3,11 @@
 ## Overview
 This WBS describes how to use JavaScript injections into Nextcloud and OnlyOffice to override their native load/save functionality, routing all file operations through Kin FS disks instead of the built-in Nextcloud storage.
 
+## Technical Decisions
+
+- **Shadow DOM** - Kin apps use Shadow DOM (not light DOM) to encapsulate styles and enable proper web component development
+- No `prototype/` folder - all code goes directly into `repository/Applications/`
+
 ## Architecture
 
 ```

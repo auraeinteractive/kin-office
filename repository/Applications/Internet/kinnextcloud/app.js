@@ -1,154 +1,136 @@
-/**
- * kinnextcloud - Nextcloud web UI launcher for Kin.
- * Opens Nextcloud in an iframe and auto-logins via kin-bridge.js.
- */
-
 (function(global) {
     'use strict';
 
-    var LOOPBACK_HOSTS = { 'localhost': true, '127.0.0.1': true, '::1': true };
-    var NEXTCLOUD_PORT = 5002;
-    var NEXTCLOUD_DASHBOARD_PATH = '/index.php/apps/dashboard/';
-
-    var INSTANCE_ID = '';
     var iframeEl = null;
-    var loginInProgress = false;
+    var nextcloudBaseUrl = '';
+    var overlayEl = null;
 
-    function getInstanceId() {
-        try {
-            var u = new URL(window.location.href);
-            return u.searchParams.get('kin_app_instance') || '';
-        } catch (e) {
-            return '';
+    function log() {
+        var args = ['[kinnextcloud]'].concat(Array.prototype.slice.call(arguments));
+        console.log.apply(console, args);
+    }
+
+    function trimTrailingSlash(value) {
+        return String(value || '').replace(/\/+$/, '');
+    }
+
+    function resolveNextcloudOrigin(params) {
+        var originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
+        if (originOverride) return trimTrailingSlash(originOverride);
+
+        var hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
+        if (hostOverride) {
+            var port = params.get('nextcloud_port') || params.get('nextcloudPort') || '443';
+            return 'https://' + hostOverride + ':' + port;
+        }
+
+        return trimTrailingSlash(window.location.origin) + '/kin-office';
+    }
+
+    function buildLoginUrl(baseUrl, params) {
+        var path = trimTrailingSlash(baseUrl) + '/index.php/login';
+        var useDirect = params.get('nextcloud_direct') === '1' ||
+            params.get('nextcloudDirect') === '1';
+        if (useDirect) {
+            path += (path.indexOf('?') === -1 ? '?' : '&') + 'direct=1';
+        }
+        return path;
+    }
+
+    function hideOidcErrorOverlay() {
+        if (overlayEl && overlayEl.parentNode) {
+            overlayEl.parentNode.removeChild(overlayEl);
+        }
+        overlayEl = null;
+        if (iframeEl) {
+            iframeEl.style.visibility = '';
         }
     }
 
-    function setLoading(text) {
-        var el = document.getElementById('loading');
-        if (!el) return;
-        if (text) {
-            el.textContent = String(text);
-            el.classList.remove('hidden');
-        } else {
-            el.classList.add('hidden');
+    function showOidcErrorOverlay(message) {
+        if (overlayEl) {
+            return;
         }
-    }
-
-    function postToWorkspace(msg) {
-        try {
-            window.parent.postMessage(msg, window.location.origin);
-        } catch (e) {
-            /* ignore */
+        if (iframeEl) {
+            iframeEl.style.visibility = 'hidden';
         }
-    }
+        overlayEl = document.createElement('div');
+        overlayEl.id = 'kinnextcloud-oidc-error';
+        overlayEl.setAttribute('role', 'alert');
 
-    function isLoopbackHost(host) {
-        var value = String(host || '').toLowerCase();
-        return !!LOOPBACK_HOSTS[value];
-    }
+        var title = document.createElement('h1');
+        title.textContent = 'Nextcloud sign-in (OpenID) is not available';
+        title.className = 'kinnextcloud-oidc-error__title';
 
-    function resolveNextcloudHost(params) {
-        var override = params.get('nextcloud_host') || params.get('nextcloudHost');
-        if (override) return override;
-        if (!isLoopbackHost(window.location.hostname)) return window.location.hostname;
-        return window.location.hostname;
-    }
+        var p = document.createElement('p');
+        p.className = 'kinnextcloud-oidc-error__body';
+        p.textContent = String(message || 'OpenID Connect discovery failed. Fix Kin TLS /.well-known on this host, then reinstall or restart kin-office.');
 
-    function sendToBridge(type, payload) {
-        try {
-            if (!iframeEl || !iframeEl.contentWindow) {
-                throw new Error('Bridge iframe is not ready');
-            }
-            iframeEl.contentWindow.postMessage(Object.assign({ type: type }, payload || {}), '*');
-            return true;
-        } catch (_e) {
-            return false;
-        }
-    }
+        var actions = document.createElement('div');
+        actions.className = 'kinnextcloud-oidc-error__actions';
 
-    function registerMenus() {
-        if (!INSTANCE_ID) return;
-        postToWorkspace({
-            kinAppRegisterMenus: true,
-            instanceId: INSTANCE_ID,
-            menus: {
-                File: [
-                    { name: 'Log out', command: 'nextcloud.logout' }
-                ]
+        var btnLocal = document.createElement('button');
+        btnLocal.type = 'button';
+        btnLocal.className = 'kinnextcloud-oidc-error__btn kinnextcloud-oidc-error__btn--primary';
+        btnLocal.textContent = 'Use local Nextcloud login (admin)';
+        btnLocal.addEventListener('click', function() {
+            hideOidcErrorOverlay();
+            if (iframeEl) {
+                iframeEl.src = trimTrailingSlash(nextcloudBaseUrl) + '/index.php/login?direct=1';
+                log('Reloading iframe with local login (direct=1)');
             }
         });
-    }
 
-    function handleMenuCommand(cmd) {
-        if (cmd === 'nextcloud.logout') {
-            setLoading('Logging out…');
-            sendToBridge('kinBridgeLogout');
-        }
-    }
+        var btnRetry = document.createElement('button');
+        btnRetry.type = 'button';
+        btnRetry.className = 'kinnextcloud-oidc-error__btn';
+        btnRetry.textContent = 'Retry OpenID login';
+        btnRetry.addEventListener('click', function() {
+            hideOidcErrorOverlay();
+            if (iframeEl) {
+                iframeEl.src = buildLoginUrl(nextcloudBaseUrl, new URLSearchParams(window.location.search));
+                log('Retrying iframe:', iframeEl.src);
+            }
+        });
 
-    function handleBridgeStatus(data) {
-        if (!data) return;
-
-        if (data.isLoggedIn) {
-            loginInProgress = false;
-            setLoading(null);
-            return;
-        }
-
-        if (data.isLoginPage && !loginInProgress) {
-            loginInProgress = true;
-            setLoading('Signing in…');
-            sendToBridge('kinBridgeLogin');
-            return;
-        }
-
-        if (loginInProgress) {
-            setLoading('Signing in…');
-        } else {
-            setLoading('Connecting to Nextcloud…');
-        }
+        actions.appendChild(btnLocal);
+        actions.appendChild(btnRetry);
+        overlayEl.appendChild(title);
+        overlayEl.appendChild(p);
+        overlayEl.appendChild(actions);
+        document.body.appendChild(overlayEl);
     }
 
     function init() {
-        INSTANCE_ID = getInstanceId();
-        iframeEl = document.getElementById('iframe');
+        document.documentElement.style.height = '100%';
+        document.body.style.margin = '0';
+        document.body.style.padding = '0';
+        document.body.style.height = '100%';
+        document.body.replaceChildren();
 
         var params = new URLSearchParams(window.location.search);
-        var host = resolveNextcloudHost(params);
-        var nextcloudOrigin = 'https://' + host + ':' + String(NEXTCLOUD_PORT);
-        var initialPath = NEXTCLOUD_DASHBOARD_PATH;
+        nextcloudBaseUrl = resolveNextcloudOrigin(params);
+        var iframeSrc = buildLoginUrl(nextcloudBaseUrl, params);
 
-        if (iframeEl) {
-            iframeEl.onload = function() {
-                sendToBridge('kinBridgeHandshake');
-                sendToBridge('kinBridgeGetStatus');
-            };
-            iframeEl.src = nextcloudOrigin + initialPath;
-        }
+        iframeEl = document.createElement('iframe');
+        iframeEl.id = 'iframe';
+        iframeEl.title = 'Nextcloud';
+        iframeEl.src = iframeSrc;
+        document.body.appendChild(iframeEl);
 
-        registerMenus();
-        setLoading('Connecting to Nextcloud…');
-    }
-
-    window.addEventListener('message', function(event) {
-        var d = event.data || {};
-
-        if (d.kinMenuCommand === true) {
-            handleMenuCommand(d.command);
-            return;
-        }
-
-        if (d.type && String(d.type).indexOf('kinBridge') === 0) {
-            if (
-                d.type === 'kinBridgeReady' ||
-                d.type === 'kinBridgeHandshakeResponse' ||
-                d.type === 'kinBridgeStatus' ||
-                d.type === 'kinBridgeStatusChange'
-            ) {
-                handleBridgeStatus(d);
+        window.addEventListener('message', function(ev) {
+            var d = ev.data;
+            if (!d || typeof d !== 'object') {
+                return;
             }
-        }
-    });
+            if (d.type === 'kinBridgeError' && d.action === 'user_oidc_discovery') {
+                log('OIDC setup:', d.error || d);
+                showOidcErrorOverlay(d.error);
+            }
+        });
+
+        log('Opening Nextcloud at:', iframeSrc, '(append ?nextcloud_direct=1 to URL for local admin login without OIDC)');
+    }
 
     init();
 })(typeof window !== 'undefined' ? window : global);

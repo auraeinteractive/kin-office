@@ -1,8 +1,8 @@
 {
   "id": "kinnextcloud",
   "displayName": "Nextcloud",
-  "version": "2",
-  "entry": "index.html",
+  "version": "3",
+  "entry": "main.js",
   "category": "Office",
   "published": true
 }

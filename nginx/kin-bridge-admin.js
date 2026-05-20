@@ -370,7 +370,6 @@
             '#content { margin-top: 0 !important; height: 100% !important; }' +
             '#content > #app > iframe { height: 100% !important; }' +
             '.header { display: none !important; }' +
-            '.header-guest { display: none !important; }' +
             '.app-content { margin-top: 0 !important; }' +
             '#app-content { margin-top: 0 !important; height: 100% !important; }';
         
@@ -496,31 +495,12 @@
             headers['X-Requested-With'] = 'XMLHttpRequest';
         }
 
-        var fetchBody = body || null;
-        var bodyType = 'null';
-        var bodyPreview = '';
-        if (body) {
-            if (typeof body === 'string') {
-                bodyType = 'string(' + body.length + ')';
-                bodyPreview = body.substring(0, 16);
-            } else if (body.constructor && body.constructor.name === 'Uint8Array') {
-                bodyType = 'Uint8Array(' + body.length + ')';
-                bodyPreview = 'firstbytes:' + body[0] + ',' + body[1] + ',' + body[2] + ',' + body[3];
-                fetchBody = body;
-            } else if (Array.isArray(body)) {
-                bodyType = 'Array(' + body.length + ')';
-                bodyPreview = 'firstbytes:' + body[0] + ',' + body[1] + ',' + body[2] + ',' + body[3];
-                fetchBody = new Uint8Array(body);
-            }
-        }
-        log('handleWebDAV:', method, url, 'body:', bodyType, 'ct:', headers['Content-Type'], bodyPreview);
-
         fetch(url, {
             method: method || 'PROPFIND',
             credentials: 'include',
             cache: 'no-store',
             headers: headers,
-            body: fetchBody
+            body: body || null
         }).then(function(resp) {
             var contentType = resp.headers && resp.headers.get ? (resp.headers.get('content-type') || '') : '';
             if (responseType === 'base64') {

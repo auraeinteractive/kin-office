@@ -1,0 +1,46 @@
+kin-office (1.0.7-1) stable; urgency=medium
+
+  * deploy: clear Nextcloud brute-force throttles automatically on each
+    deploy-mode run (occ reset for common IPs + log-derived IPv4 + SQLite
+    DELETE for default sqlite installs) so OIDC/login debugging needs no
+    manual occ commands.
+  * kin-bridge: OIDC error copy mentions auto throttle clear on deploy.
+
+ -- Kin <packages@os-kin.com>  Sun, 11 May 2026 14:00:00 +0000
+
+kin-office (1.0.6-1) stable; urgency=medium
+
+  * kinnextcloud: visible OIDC failure panel with local-login and retry; URL
+    param nextcloud_direct=1 to open /index.php/login?direct=1 immediately.
+
+ -- Kin <packages@os-kin.com>  Sun, 11 May 2026 12:00:00 +0000
+
+kin-office (1.0.5-1) stable; urgency=low
+
+  * kin-bridge: clearer OIDC discovery failure hint (multi-port deploy probe).
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 20:00:00 +0000
+
+kin-office (1.0.4-1) stable; urgency=medium
+
+  * deploy: probe OIDC discovery from the nextcloud container against several URLs
+    (configured, https://host/.well-known, :9219, host.docker.internal:9219) and
+    register user_oidc with the first that returns valid discovery JSON.
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 18:00:00 +0000
+
+kin-office (1.0.3-1) stable; urgency=medium
+
+  * postinst: start or restart kin-office on configure so deploy.sh runs after every install/upgrade.
+  * packaging: package Version is taken from this changelog (no separate autobump).
+  * OIDC/subpath: deploy, nginx rewrites, kin-bridge, kinnextcloud fixes.
+
+ -- Kin <packages@os-kin.com>  Sat, 10 May 2026 12:00:00 +0000
+
+kin-office (1.0.0-1) stable; urgency=low
+
+  * Initial release.
+  * Nextcloud with OnlyOffice integration for Kin OS.
+  * Installs to /opt/kin/modules/kin-office/.
+
+ -- Kin <packages@os-kin.com>  Wed, 29 Apr 2026 12:00:00 +0000

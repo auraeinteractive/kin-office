@@ -1,8 +1,8 @@
 {
   "id": "kinonlyoffice_documents",
   "displayName": "OnlyOffice Documents",
-  "version": "11",
-  "entry": "index.html",
+  "version": "12",
+  "entry": "main.js",
   "category": "Office",
   "published": true
 }

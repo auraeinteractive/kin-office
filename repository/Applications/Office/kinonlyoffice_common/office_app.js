@@ -1,9 +1,3 @@
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-
-function isLoopbackHost(host) {
-    return LOOPBACK_HOSTS.has((host || '').toLowerCase());
-}
-
 function normalizeVolumeLabel(volume) {
     const value = String(volume || 'Nextcloud').trim();
     if (!value) return 'Nextcloud:';
@@ -29,13 +23,23 @@ function kinPathBaseName(path) {
     return parts.length ? parts[parts.length - 1] : '';
 }
 
+function kinPathInfoPath(path) {
+    const value = String(path || '').trim();
+    return value ? value + '.info' : '';
+}
+
+function fileTypeFromName(name, fallback) {
+    const value = String(name || '').toLowerCase();
+    const match = value.match(/\.([a-z0-9]+)$/);
+    if (match && (match[1] === 'docx' || match[1] === 'xlsx' || match[1] === 'pptx')) {
+        return match[1];
+    }
+    return fallback || 'docx';
+}
+
 function kinPathToFileRoute(path) {
     const parsed = parseKinPath(path);
     if (!parsed) return null;
-    const volume = String(parsed.volume || '').toLowerCase();
-    if (volume !== 'home' && volume !== 'system') {
-        return null;
-    }
     const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
     if (!segs.length) return null;
     return '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/');
@@ -80,27 +84,50 @@ function shellQuote(value) {
     return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+function ensureOnlyOfficeIframeShell() {
+    const html = document.documentElement;
+    const body = document.body;
+    html.style.height = '100%';
+    body.style.margin = '0';
+    body.style.padding = '0';
+    body.style.height = '100%';
+    body.style.overflow = 'hidden';
+    let iframeEl = document.getElementById('iframe');
+    if (!iframeEl) {
+        body.replaceChildren();
+        iframeEl = document.createElement('iframe');
+        iframeEl.id = 'iframe';
+        iframeEl.setAttribute('title', 'OnlyOffice');
+        iframeEl.style.width = '100%';
+        iframeEl.style.height = '100%';
+        iframeEl.style.border = 'none';
+        body.appendChild(iframeEl);
+    }
+    return iframeEl;
+}
+
 export function bootstrapOnlyOfficeApp(config) {
     const appConfig = Object.assign({
         appTag: 'kinonlyoffice',
         targetPath: '/index.php/apps/onlyoffice/new?name=New%20document.docx&dir=%2F',
         menuPrefix: 'onlyoffice.app',
-        defaultFilename: 'Document.docx'
+        defaultFilename: 'Document.docx',
+        fileType: 'docx'
     }, config || {});
 
-    const iframeEl = document.getElementById('iframe');
-    if (!iframeEl) {
-        throw new Error('Missing #iframe element');
-    }
+    const iframeEl = ensureOnlyOfficeIframeShell();
 
     const ORIGIN = window.location.origin;
     const params = new URLSearchParams(window.location.search);
-    const nextcloudHost = resolveNextcloudHost(params);
+    const NEXTCLOUD_ORIGIN = resolveNextcloudOrigin(params);
     const nextcloudVolumeLabel = normalizeVolumeLabel(params.get('kin_nextcloud_volume') || params.get('nextcloud_volume') || 'Nextcloud');
     const nextcloudAssignTarget = String(params.get('kin_nextcloud_assign_target') || 'Home:.Mounts/nextcloud');
     const dialogInitialPath = 'Mountlist:';
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
-    const NEXTCLOUD_ORIGIN = 'https://' + nextcloudHost + ':5002';
+    const modeParam = String(params.get('onlyoffice_mode') || params.get('kin_onlyoffice_mode') || '').toLowerCase();
+    const directMode = modeParam === 'direct' || params.get('onlyoffice_direct') === '1' || params.get('kin_onlyoffice_direct') === '1';
+    const directOrigin = String(params.get('onlyoffice_direct_origin') || params.get('kin_onlyoffice_direct_origin') || NEXTCLOUD_ORIGIN).replace(/\/+$/, '');
+    const directApiBase = directOrigin + '/direct/api';
 
     const MENU_OPEN_COMMAND = appConfig.menuPrefix + '.open';
     const MENU_SAVE_COMMAND = appConfig.menuPrefix + '.save';
@@ -120,7 +147,16 @@ export function bootstrapOnlyOfficeApp(config) {
     let currentOnlyOfficePath = null;
     let currentKinPath = null;
     let autosavePollingInterval = null;
-    let lastAutosaveCheck = 0;
+    let directSession = null;
+    let directStatePollingInterval = null;
+    let directSyncing = false;
+    let directSaveAsPromptOpen = false;
+    let directLastPromptedVersion = 0;
+
+    let bridgeHeartbeatInterval = null;
+    let bridgeDead = false;
+    let bridgeHeartbeatFailures = 0;
+    let bridgeRehandshakeTimer = null;
 
     const instanceId = getInstanceId();
 
@@ -216,22 +252,25 @@ export function bootstrapOnlyOfficeApp(config) {
 
     function registerMenus() {
         if (!instanceId) return;
+        const menus = {
+            File: [
+                { name: 'Open...', command: MENU_OPEN_COMMAND },
+                { name: 'Save', command: MENU_SAVE_COMMAND },
+                { name: 'Save As...', command: MENU_SAVE_AS_COMMAND },
+                { name: 'Log out', command: MENU_LOGOUT_COMMAND }
+            ]
+        };
+        if (!directMode) {
+            menus.Storage = [
+                { name: 'Connect Nextcloud volume', command: MENU_STORAGE_CONNECT_COMMAND },
+                { name: 'Nextcloud volume status', command: MENU_STORAGE_STATUS_COMMAND },
+                { name: 'Disconnect Nextcloud volume', command: MENU_STORAGE_DISCONNECT_COMMAND }
+            ];
+        }
         postToParent({
             kinAppRegisterMenus: true,
             instanceId,
-            menus: {
-                File: [
-                    { name: 'Open...', command: MENU_OPEN_COMMAND },
-                    { name: 'Save', command: MENU_SAVE_COMMAND },
-                    { name: 'Save As...', command: MENU_SAVE_AS_COMMAND },
-                    { name: 'Log out', command: MENU_LOGOUT_COMMAND }
-                ],
-                Storage: [
-                    { name: 'Connect Nextcloud volume', command: MENU_STORAGE_CONNECT_COMMAND },
-                    { name: 'Nextcloud volume status', command: MENU_STORAGE_STATUS_COMMAND },
-                    { name: 'Disconnect Nextcloud volume', command: MENU_STORAGE_DISCONNECT_COMMAND }
-                ]
-            }
+            menus
         });
     }
 
@@ -347,6 +386,108 @@ export function bootstrapOnlyOfficeApp(config) {
             throw new Error((json && json.message) ? String(json.message) : ('HTTP ' + response.status + ' ' + text.substring(0, 200)));
         }
         return json || {};
+    }
+
+    async function readKinTextFile(kinPath, options) {
+        const readOptions = options || {};
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutMs = typeof readOptions.timeoutMs === 'number' ? readOptions.timeoutMs : 0;
+        let timer = null;
+        if (controller && timeoutMs > 0) {
+            timer = setTimeout(function() {
+                controller.abort();
+            }, timeoutMs);
+        }
+        const response = await fetch('/api/file/read', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+            },
+            body: JSON.stringify({ path: String(kinPath || '') }),
+            signal: controller ? controller.signal : undefined
+        });
+        if (timer) clearTimeout(timer);
+        const text = await response.text();
+        let json = null;
+        if (text) {
+            try {
+                json = JSON.parse(text);
+            } catch (_error) {
+                json = null;
+            }
+        }
+        if (!response.ok || !json || json.response !== 'success') {
+            return '';
+        }
+        return String(json.data || '');
+    }
+
+    async function writeKinTextFile(kinPath, body) {
+        const response = await apiPostJson('/api/file/write', {
+            path: String(kinPath || ''),
+            body: String(body || '')
+        });
+        if (!response || response.response !== 'success') {
+            throw new Error((response && response.message) ? String(response.message) : 'Could not write ' + kinPath);
+        }
+    }
+
+    async function readKinOnlyOfficeInfo(kinPath) {
+        const infoPath = kinPathInfoPath(kinPath);
+        if (!infoPath) return {};
+        try {
+            const text = await readKinTextFile(infoPath, { timeoutMs: 1500 });
+            if (!text) return {};
+            const parsed = JSON.parse(text);
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_error) {
+            return {};
+        }
+    }
+
+    async function writeKinOnlyOfficeInfo(kinPath, directInfo) {
+        const infoPath = kinPathInfoPath(kinPath);
+        if (!infoPath || !directInfo) return;
+        const existing = await readKinOnlyOfficeInfo(kinPath);
+        existing.kinOnlyOffice = Object.assign({}, existing.kinOnlyOffice || {}, directInfo);
+        await writeKinTextFile(infoPath, JSON.stringify(existing, null, 2));
+    }
+
+    async function directFetchJson(path, options) {
+        const requestOptions = options || {};
+        const response = await fetch(directApiBase + path, {
+            method: requestOptions.method || 'GET',
+            cache: 'no-store',
+            headers: Object.assign({
+                Accept: 'application/json'
+            }, requestOptions.headers || {}),
+            body: requestOptions.body || null
+        });
+        const text = await response.text();
+        let json = null;
+        if (text) {
+            try {
+                json = JSON.parse(text);
+            } catch (_error) {
+                json = null;
+            }
+        }
+        if (!response.ok || !json || (json.response && json.response !== 'success')) {
+            throw new Error((json && json.message) ? String(json.message) : ('Direct connector failed (HTTP ' + response.status + ')'));
+        }
+        return json;
+    }
+
+    function directPostJson(path, payload) {
+        return directFetchJson(path, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload || {})
+        });
     }
 
     async function runKinDosLine(line, cwd) {
@@ -695,31 +836,13 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function writeKinBinaryFile(kinPath, bytes) {
         log('writeKinBinaryFile: path=', kinPath, 'bytes=', bytes ? bytes.length : 0);
-        const b64 = bytesToBase64(bytes);
-        log('writeKinBinaryFile: base64 length=', b64.length);
-        
-        try {
-            const response = await apiPostJson('/api/file/write_binary', {
-                path: String(kinPath || ''),
-                data_base64: b64
-            });
-            log('writeKinBinaryFile response:', response);
-            if (!response || response.response !== 'success') {
-                throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
-            }
-        } catch (writeError) {
-            log('writeKinBinaryFile FAILED:', writeError && writeError.message ? writeError.message : writeError);
-            
-            // Try alternative: use /api/file/write endpoint
-            log('Trying alternative /api/file/write...');
-            const writeResponse = await apiPostJson('/api/file/write', {
-                path: String(kinPath || ''),
-                data: Array.from(bytes)
-            });
-            log('writeKinBinaryFile alt response:', writeResponse);
-            if (!writeResponse || writeResponse.response !== 'success') {
-                throw new Error((writeResponse && writeResponse.message) ? String(writeResponse.message) : 'Could not write file to Kin path (alt)');
-            }
+        const response = await apiPostJson('/api/file/write', {
+            path: String(kinPath || ''),
+            data: Array.from(bytes)
+        });
+        log('writeKinBinaryFile response:', response);
+        if (!response || response.response !== 'success') {
+            throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
         }
     }
 
@@ -746,56 +869,119 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    const AUTOSAVE_POLL_INTERVAL_MS = 15000;
+    const AUTOSAVE_DEBOUNCE_MS = 3000;
+    const AUTOSAVE_FALLBACK_POLL_MS = 30000;
+    let autosaveSyncing = false;
+    let autosaveLastSignature = '';
+    let autosaveDebounceTimer = null;
 
-    async function startAutosavePolling() {
+    async function autosaveSyncNow(reason) {
+        if (autosaveSyncing) return;
+        if (!currentKinPath) return;
+        autosaveSyncing = true;
+        try {
+            const ctx = await getOnlyOfficeContext();
+            const sourcePath = (ctx && ctx.filePath) ? String(ctx.filePath) : currentOnlyOfficePath;
+            if (!sourcePath) return;
+
+            const fingerprint = await getNextcloudFileFingerprint(sourcePath);
+            const sig = fingerprint ? fingerprint.signature : '';
+            if (sig && sig !== autosaveLastSignature) {
+                log('Autosave (' + reason + '): syncing to', currentKinPath);
+                await flushOnlyOfficeEdits(sourcePath);
+                await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
+                autosaveLastSignature = sig;
+                log('Autosave sync complete');
+            }
+        } catch (error) {
+            log('Autosave sync error:', error && error.message ? error.message : error);
+        } finally {
+            autosaveSyncing = false;
+        }
+    }
+
+    function scheduleAutosaveDebounce() {
+        if (!currentKinPath) return;
+        if (autosaveDebounceTimer) clearTimeout(autosaveDebounceTimer);
+        autosaveDebounceTimer = setTimeout(function() {
+            autosaveDebounceTimer = null;
+            autosaveSyncNow('keydown-debounce');
+        }, AUTOSAVE_DEBOUNCE_MS);
+    }
+
+    function startAutosavePolling() {
         if (autosavePollingInterval) return;
         if (!currentKinPath) return;
-        const context = await getOnlyOfficeContext();
-        if (!context || !context.filePath) return;
-        
-        log('Starting autosave polling for', currentKinPath);
-        let lastSavedSize = 0;
-        
-        autosavePollingInterval = setInterval(async () => {
-            try {
-                log('Autosave poll check...');
-                const ctx = await getOnlyOfficeContext();
-                if (!ctx || !ctx.filePath) {
-                    log('Autosave: no OnlyOffice context');
-                    return;
-                }
-                
-                log('Autosave: currentKinPath=', currentKinPath, 'filePath=', ctx.filePath);
-                if (!currentKinPath) {
-                    log('Autosave: no currentKinPath, skipping');
-                    return;
-                }
-                
-                const bytes = await readNextcloudFileBytes(ctx.filePath);
-                const currentSize = bytes ? bytes.length : 0;
-                
-                log('Autosave: currentSize=', currentSize, 'lastSavedSize=', lastSavedSize);
-                
-                if (currentSize !== lastSavedSize && currentSize > 0) {
-                    log('Autosave detected, syncing to', currentKinPath);
-                    await flushOnlyOfficeEdits(ctx.filePath);
-                    await saveNextcloudFileToKinPath(ctx.filePath, currentKinPath);
-                    lastSavedSize = currentSize;
-                    log('Autosave sync complete');
-                }
-            } catch (error) {
-                log('Autosave poll error:', error && error.message ? error.message : error);
-            }
-        }, AUTOSAVE_POLL_INTERVAL_MS);
+
+        log('Starting autosave (debounced keydown + fallback poll) for', currentKinPath);
+        autosavePollingInterval = setInterval(function() {
+            autosaveSyncNow('fallback-poll');
+        }, AUTOSAVE_FALLBACK_POLL_MS);
     }
 
     function stopAutosavePolling() {
         if (autosavePollingInterval) {
             clearInterval(autosavePollingInterval);
             autosavePollingInterval = null;
-            log('Stopped autosave polling');
         }
+        if (autosaveDebounceTimer) {
+            clearTimeout(autosaveDebounceTimer);
+            autosaveDebounceTimer = null;
+        }
+        log('Stopped autosave');
+    }
+
+    function startBridgeHeartbeat() {
+        if (bridgeHeartbeatInterval) return;
+        bridgeHeartbeatInterval = setInterval(async function() {
+            try {
+                await bridgeRequest('kinBridgeGetStatus', {}, 5000);
+                if (bridgeDead) {
+                    bridgeDead = false;
+                    bridgeHeartbeatFailures = 0;
+                    log('Bridge heartbeat: reconnected');
+                }
+                bridgeHeartbeatFailures = 0;
+            } catch (error) {
+                bridgeHeartbeatFailures += 1;
+                if (bridgeHeartbeatFailures >= 3 && !bridgeDead) {
+                    bridgeDead = true;
+                    log('Bridge heartbeat: bridge unreachable after', bridgeHeartbeatFailures, 'failures, scheduling re-handshake');
+                    scheduleBridgeRehandshake();
+                }
+            }
+        }, 60000);
+        log('Started bridge heartbeat');
+    }
+
+    function stopBridgeHeartbeat() {
+        if (bridgeHeartbeatInterval) {
+            clearInterval(bridgeHeartbeatInterval);
+            bridgeHeartbeatInterval = null;
+        }
+        if (bridgeRehandshakeTimer) {
+            clearTimeout(bridgeRehandshakeTimer);
+            bridgeRehandshakeTimer = null;
+        }
+        bridgeDead = false;
+        bridgeHeartbeatFailures = 0;
+        log('Stopped bridge heartbeat');
+    }
+
+    function scheduleBridgeRehandshake() {
+        if (bridgeRehandshakeTimer) return;
+        bridgeRehandshakeTimer = setTimeout(async function() {
+            bridgeRehandshakeTimer = null;
+            log('Bridge re-handshake attempt...');
+            if (sendToBridge('kinBridgeHandshake')) {
+                await waitMs(3000);
+                if (bridgeDead) {
+                    scheduleBridgeRehandshake();
+                }
+            } else {
+                scheduleBridgeRehandshake();
+            }
+        }, 15000);
     }
 
     async function readKinFileBytes(kinPath) {
@@ -819,6 +1005,198 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         const buffer = await response.arrayBuffer();
         return new Uint8Array(buffer);
+    }
+
+    function directSessionId() {
+        return directSession && directSession.sessionId ? String(directSession.sessionId) : '';
+    }
+
+    function directEditorUrl(session) {
+        const editorUrl = String(session && session.editorUrl ? session.editorUrl : '');
+        if (!editorUrl) return '';
+        const url = new URL(editorUrl, directOrigin);
+        url.searchParams.set('api', directOrigin + '/direct/api');
+        return url.toString();
+    }
+
+    async function createDirectSession(payload) {
+        const response = await directPostJson('/session', payload);
+        directSession = response;
+        return response;
+    }
+
+    async function refreshDirectState() {
+        const id = directSessionId();
+        if (!id) return null;
+        const response = await directFetchJson('/session/' + encodeURIComponent(id) + '/state');
+        if (response && response.state) {
+            directSession.state = response.state;
+            directSession.version = response.state.version;
+            directSession.info = response.info || directSession.info;
+        }
+        return response;
+    }
+
+    async function fetchDirectContent() {
+        const id = directSessionId();
+        if (!id) {
+            throw new Error('No direct ONLYOFFICE session is active');
+        }
+        const response = await directFetchJson('/session/' + encodeURIComponent(id) + '/content');
+        if (response && response.state) {
+            directSession.state = response.state;
+            directSession.version = response.state.version;
+            directSession.info = response.info || directSession.info;
+        }
+        return base64ToBytes(response.data_base64 || '');
+    }
+
+    async function forceSaveDirectSession() {
+        const id = directSessionId();
+        if (!id) return;
+        const beforeVersion = Number(directSession && directSession.version ? directSession.version : 0);
+        try {
+            await directPostJson('/session/' + encodeURIComponent(id) + '/forcesave', {});
+        } catch (error) {
+            log('Direct force-save failed; continuing with latest connector content:', error && error.message ? error.message : error);
+        }
+        for (let index = 0; index < 10; index += 1) {
+            await waitMs(700);
+            const stateResponse = await refreshDirectState();
+            const state = stateResponse && stateResponse.state ? stateResponse.state : null;
+            if (!state) continue;
+            if (Number(state.version || 0) > beforeVersion || state.savePending === false) {
+                return;
+            }
+        }
+    }
+
+    async function saveDirectSessionToKinPath(targetKinPath, options) {
+        const saveOptions = options || {};
+        if (!directSessionId()) {
+            throw new Error('No direct ONLYOFFICE document is open');
+        }
+        if (!saveOptions.skipForceSave) {
+            await forceSaveDirectSession();
+        }
+        const bytes = await fetchDirectContent();
+        await writeKinBinaryFile(targetKinPath, bytes);
+        currentKinPath = targetKinPath;
+        if (directSession && directSession.info) {
+            await writeKinOnlyOfficeInfo(targetKinPath, directSession.info);
+        }
+        requestWorkspaceRefresh();
+    }
+
+    async function syncDirectAutosaveToKin() {
+        if (!directMode || directSyncing || !directSessionId()) return;
+        directSyncing = true;
+        try {
+            const beforeVersion = Number(directSession && directSession.version ? directSession.version : 0);
+            const stateResponse = await refreshDirectState();
+            const state = stateResponse && stateResponse.state ? stateResponse.state : null;
+            const nextVersion = Number(state && state.version ? state.version : 0);
+            if (!currentKinPath) {
+                if (nextVersion > beforeVersion) {
+                    await promptDirectSaveAsForNewDocument('connector-save');
+                }
+                return;
+            }
+            if (nextVersion > beforeVersion) {
+                await saveDirectSessionToKinPath(currentKinPath, { skipForceSave: true });
+                log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
+            } else if (directSession && directSession.info) {
+                await writeKinOnlyOfficeInfo(currentKinPath, directSession.info);
+            }
+        } catch (error) {
+            log('Direct autosave sync failed:', error && error.message ? error.message : error);
+        } finally {
+            directSyncing = false;
+        }
+    }
+
+    function startDirectStatePolling() {
+        if (directStatePollingInterval) return;
+        directStatePollingInterval = setInterval(function() {
+            syncDirectAutosaveToKin();
+        }, 4000);
+    }
+
+    function stopDirectStatePolling() {
+        if (directStatePollingInterval) {
+            clearInterval(directStatePollingInterval);
+            directStatePollingInterval = null;
+        }
+    }
+
+    async function openDirectEditor(session) {
+        const url = directEditorUrl(session);
+        if (!url) {
+            throw new Error('Direct connector did not return an editor URL');
+        }
+        launchedTarget = true;
+        iframeEl.src = url;
+        startDirectStatePolling();
+    }
+
+    async function openDirectKinPath(kinPath) {
+        const bytes = await readKinFileBytes(kinPath);
+        const filename = kinPathBaseName(kinPath) || appConfig.defaultFilename;
+        const fileType = fileTypeFromName(filename, appConfig.fileType);
+        const info = await readKinOnlyOfficeInfo(kinPath);
+        const session = await createDirectSession({
+            filename,
+            path: kinPath,
+            file_type: fileType,
+            data_base64: bytesToBase64(bytes),
+            info
+        });
+        currentKinPath = kinPath;
+        if (session.info) {
+            await writeKinOnlyOfficeInfo(kinPath, session.info);
+        }
+        await openDirectEditor(session);
+        return true;
+    }
+
+    async function openDirectBlankDocument() {
+        const filename = appConfig.defaultFilename;
+        const session = await createDirectSession({
+            filename,
+            file_type: appConfig.fileType
+        });
+        currentKinPath = null;
+        await openDirectEditor(session);
+    }
+
+    async function directSaveAs(defaultName) {
+        const targetKinPath = await requestFileDialog({
+            mode: 'save',
+            initialPath: dialogInitialPath,
+            defaultFilename: defaultName || appConfig.defaultFilename
+        });
+        await withBusy('Saving to Kin path...', async function() {
+            await saveDirectSessionToKinPath(targetKinPath);
+        });
+        await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
+    }
+
+    async function promptDirectSaveAsForNewDocument(reason) {
+        if (!directMode || currentKinPath || !directSessionId() || directSaveAsPromptOpen) return;
+        const version = Number(directSession && directSession.version ? directSession.version : 0);
+        if (version && directLastPromptedVersion === version) return;
+        directSaveAsPromptOpen = true;
+        directLastPromptedVersion = version;
+        try {
+            log('Prompting Save As for direct unsaved document:', reason || 'save');
+            await directSaveAs(appConfig.defaultFilename);
+        } catch (error) {
+            if (!error || error.message !== 'cancel') {
+                await openAlert(error && error.message ? error.message : String(error), 'Save failed');
+            }
+        } finally {
+            directSaveAsPromptOpen = false;
+        }
     }
 
     async function writeNextcloudFileBytes(nextcloudPath, bytes) {
@@ -972,10 +1350,53 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function handleMenuCommand(command) {
         if (command === MENU_LOGOUT_COMMAND) {
+            stopBridgeHeartbeat();
+            if (directMode) {
+                stopDirectStatePolling();
+                await openAlert('Direct ONLYOFFICE sessions are closed by closing the window.', 'OnlyOffice');
+                return;
+            }
             sendToBridge('kinBridgeLogout');
             return;
         }
         try {
+            if (directMode) {
+                if (command === MENU_OPEN_COMMAND) {
+                    const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
+                    await withBusy('Opening document...', async function() {
+                        await openDirectKinPath(kinPath);
+                    });
+                    return;
+                }
+
+                if (command === MENU_SAVE_COMMAND) {
+                    if (!directSessionId()) {
+                        await openAlert('Open a document first, then use Save.');
+                        return;
+                    }
+                    if (!currentKinPath) {
+                        await directSaveAs(appConfig.defaultFilename);
+                        return;
+                    }
+                    await withBusy('Saving to Kin path...', async function() {
+                        await saveDirectSessionToKinPath(currentKinPath);
+                    });
+                    return;
+                }
+
+                if (command === MENU_SAVE_AS_COMMAND) {
+                    if (!directSessionId()) {
+                        await openAlert('Open a document first, then use Save As.');
+                        return;
+                    }
+                    const defaultName = currentKinPath ? kinPathBaseName(currentKinPath) : appConfig.defaultFilename;
+                    await directSaveAs(defaultName);
+                    return;
+                }
+
+                return;
+            }
+
             if (command === MENU_OPEN_COMMAND) {
                 const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
                 await withBusy('Opening document...', async function() {
@@ -1009,15 +1430,10 @@ export function bootstrapOnlyOfficeApp(config) {
                         await withBusy('Saving to Kin path...', async function() {
                             await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
                         });
-                        await openAlert('Saved to ' + currentKinPath + '.', 'Saved');
                     } catch (saveError) {
                         log('Save to Kin failed:', saveError && saveError.message ? saveError.message : saveError);
                         await openAlert('Save failed: ' + (saveError && saveError.message ? saveError.message : String(saveError)), 'Error');
                     }
-                } else if (context && context.filePath) {
-                    await openAlert('OnlyOffice autosaves this document in Nextcloud.\n\nCurrent file: ' + context.filePath, 'Saved');
-                } else {
-                    await openAlert('OnlyOffice autosaves documents after they are opened.');
                 }
                 return;
             }
@@ -1042,7 +1458,6 @@ export function bootstrapOnlyOfficeApp(config) {
                     });
                     currentKinPath = targetKinPath;
                     startAutosavePolling();
-                    await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                     return;
                 }
                 await withBusy('Saving copy in Nextcloud...', async function() {
@@ -1084,7 +1499,6 @@ export function bootstrapOnlyOfficeApp(config) {
                 });
                 currentKinPath = targetKinPath;
                 startAutosavePolling();
-                await openAlert('Saved to ' + targetKinPath + '.', 'Save As');
                 return;
             }
             const split = splitNextcloudPath(targetPath);
@@ -1110,6 +1524,46 @@ export function bootstrapOnlyOfficeApp(config) {
         } catch (error) {
             if (error && error.message === 'cancel') return;
             await openAlert(error && error.message ? error.message : String(error));
+        }
+    }
+
+    async function handleDirectOnlyOfficeEvent(data) {
+        if (!directMode || !data) return;
+        if (data.sessionId && directSessionId() && String(data.sessionId) !== directSessionId()) {
+            return;
+        }
+        if (data.event === 'ready') {
+            await refreshDirectState().catch(function(error) {
+                log('Direct state refresh failed:', error && error.message ? error.message : error);
+            });
+            return;
+        }
+        if (data.event === 'documentStateChange') {
+            syncDirectAutosaveToKin();
+            return;
+        }
+        if (data.event === 'editorKeydown') {
+            const key = String(data.key || '').toLowerCase();
+            if ((data.ctrlKey || data.metaKey) && key === 's' && !currentKinPath) {
+                await promptDirectSaveAsForNewDocument('keyboard-save');
+            } else {
+                syncDirectAutosaveToKin();
+            }
+            return;
+        }
+        if (data.event === 'requestSaveAs') {
+            const saveData = data.saveData || {};
+            try {
+                await directSaveAs(saveData.name || (currentKinPath ? kinPathBaseName(currentKinPath) : appConfig.defaultFilename));
+            } catch (error) {
+                if (!error || error.message !== 'cancel') {
+                    await openAlert(error && error.message ? error.message : String(error), 'Save failed');
+                }
+            }
+            return;
+        }
+        if (data.event === 'error') {
+            log('Direct editor error:', data.error || 'unknown error');
         }
     }
 
@@ -1177,6 +1631,9 @@ export function bootstrapOnlyOfficeApp(config) {
                 if (data.isLoggedIn) {
                     loginInProgress = false;
                     bridgeUser = data.currentUser || bridgeUser;
+                    bridgeDead = false;
+                    bridgeHeartbeatFailures = 0;
+                    startBridgeHeartbeat();
                     await openTargetWhenReady(data);
                 } else if (data.isLoginPage && !loginInProgress) {
                     loginInProgress = true;
@@ -1188,6 +1645,10 @@ export function bootstrapOnlyOfficeApp(config) {
 
             case 'kinBridgeOnlyOfficeRequestSaveAs':
                 await handleOnlyOfficeSaveAsRequest(data);
+                break;
+
+            case 'kinBridgeEditorKeydown':
+                scheduleAutosaveDebounce();
                 break;
 
             case 'kinBridgeOpenWindow':
@@ -1210,19 +1671,40 @@ export function bootstrapOnlyOfficeApp(config) {
             return;
         }
 
+        if (data.type === 'kinDirectOnlyOfficeEvent') {
+            handleDirectOnlyOfficeEvent(data);
+            return;
+        }
+
         if (data.type && data.type.indexOf('kinBridge') === 0) {
             handleBridgeMessage(data);
         }
     });
 
-    iframeEl.onload = function() {
-        sendToBridge('kinBridgeHandshake');
-        sendToBridge('kinBridgeGetStatus');
-    };
-
     registerMenus();
-    var initialPath = kinOpenPath ? '/index.php/apps/dashboard/' : appConfig.targetPath;
-    iframeEl.src = NEXTCLOUD_ORIGIN + initialPath;
+    if (directMode) {
+        if (kinOpenPath) {
+            withBusy('Opening document...', async function() {
+                await openDirectKinPath(kinOpenPath);
+            }).catch(function(error) {
+                openAlert('Could not open requested file:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+            });
+        } else {
+            withBusy('Creating document...', async function() {
+                await openDirectBlankDocument();
+            }).catch(function(error) {
+                openAlert('Could not create document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+            });
+        }
+    } else {
+        iframeEl.onload = function() {
+            sendToBridge('kinBridgeHandshake');
+            sendToBridge('kinBridgeGetStatus');
+        };
+
+        var initialPath = kinOpenPath ? '/index.php/apps/dashboard/' : appConfig.targetPath;
+        iframeEl.src = NEXTCLOUD_ORIGIN + initialPath;
+    }
 }
 
 function getInstanceId() {
@@ -1234,10 +1716,20 @@ function getInstanceId() {
     }
 }
 
-function resolveNextcloudHost(params) {
-    const override = params.get('nextcloud_host') || params.get('nextcloudHost');
-    if (override) {
-        return override;
+function trimTrailingSlash(value) {
+    return String(value || '').replace(/\/+$/, '');
+}
+
+function resolveNextcloudOrigin(params) {
+    const originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
+    if (originOverride) {
+        return trimTrailingSlash(originOverride);
+    }
+
+    const hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
+    if (hostOverride) {
+        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '443';
+        return 'https://' + hostOverride + ':' + port;
     }
 
     try {
@@ -1246,9 +1738,5 @@ function resolveNextcloudHost(params) {
         // ignore storage failures
     }
 
-    if (!isLoopbackHost(window.location.hostname)) {
-        return window.location.hostname;
-    }
-
-    return window.location.hostname;
+    return trimTrailingSlash(window.location.origin) + '/kin-office';
 }
