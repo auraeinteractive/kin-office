@@ -371,7 +371,7 @@ location ^~ ${prefix}/ds/ {
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
-    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
+    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}});navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(s){s.unregister()})}).catch(function(){})</script></head>';
 }
 
 location ^~ ${prefix}/direct/ {
@@ -507,7 +507,7 @@ location ^~ ${prefix}/ds/ {
     proxy_buffering off;
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
-    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
+    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}});navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(s){s.unregister()})}).catch(function(){})</script></head>';
 }
 
 location ^~ ${prefix}/direct/ {
@@ -655,7 +655,7 @@ location ^~ ${prefix}/ds/ {
     proxy_buffering off;
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
-    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
+    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}});navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(s){s.unregister()})}).catch(function(){})</script></head>';
 }
 
 location ^~ ${prefix}/direct/ {
