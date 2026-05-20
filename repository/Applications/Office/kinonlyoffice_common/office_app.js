@@ -88,7 +88,7 @@ function shellQuote(value) {
 const OFFICE_SKELETON_MAX = { docx: 1200, xlsx: 1900, pptx: 7500 };
 const DIRECT_FLUSH_POLL_MS = 500;
 const DIRECT_FLUSH_MAX_POLLS = 20;
-const DIRECT_SAVE_SYNC_POLLS = 15;
+const DIRECT_SAVE_SYNC_POLLS = 30;
 const DIRECT_SAVE_SYNC_POLL_MS = 400;
 /** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
@@ -1164,6 +1164,23 @@ export function bootstrapOnlyOfficeApp(config) {
         return directSession && directSession.sessionId ? String(directSession.sessionId) : '';
     }
 
+    function directSessionState() {
+        return directSession && directSession.state ? directSession.state : null;
+    }
+
+    function directSessionVersion() {
+        const state = directSessionState();
+        if (state && state.version != null) {
+            return Number(state.version);
+        }
+        return Number(directSession && directSession.version != null ? directSession.version : 0);
+    }
+
+    function directSessionSavePending() {
+        const state = directSessionState();
+        return !!(state && state.savePending);
+    }
+
     function directEditorUrl(session) {
         const editorUrl = String(session && session.editorUrl ? session.editorUrl : '');
         if (!editorUrl) return '';
@@ -1222,7 +1239,10 @@ export function bootstrapOnlyOfficeApp(config) {
 
         const beforeVersion = version;
         try {
-            await directPostJson('/session/' + encodeURIComponent(id) + '/forcesave', {});
+            const forceResult = await directPostJson('/session/' + encodeURIComponent(id) + '/forcesave', {});
+            if (!forceResult || forceResult.accepted !== true) {
+                log('Direct force-save was not accepted by Document Server', forceResult && forceResult.body ? forceResult.body : '');
+            }
         } catch (error) {
             log('Direct force-save request failed:', error && error.message ? error.message : error);
         }
@@ -1262,11 +1282,10 @@ export function bootstrapOnlyOfficeApp(config) {
         if (!directMode || directSyncing || !directSessionId()) return;
         directSyncing = true;
         try {
-            const beforeVersion = Number(directSession && directSession.version ? directSession.version : 0);
+            const beforeVersion = directSessionVersion();
             const stateResponse = await refreshDirectState();
-            const state = stateResponse && stateResponse.state ? stateResponse.state : null;
-            const nextVersion = Number(state && state.version ? state.version : 0);
-            const savePending = !!(state && state.savePending);
+            const nextVersion = directSessionVersion();
+            const savePending = directSessionSavePending();
             if (!currentKinPath) {
                 if (nextVersion > beforeVersion && !savePending) {
                     await promptDirectSaveAsForNewDocument('connector-save');
@@ -1290,19 +1309,60 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function syncAfterEditorReportedSaved() {
         const persistedBefore = directLastPersistedVersion;
+
+        async function trySyncFromConnector() {
+            const version = directSessionVersion();
+            if (version > persistedBefore && !directSessionSavePending()) {
+                await syncDirectAutosaveToKin();
+                return true;
+            }
+            return false;
+        }
+
         for (let index = 0; index < DIRECT_SAVE_SYNC_POLLS; index += 1) {
             if (index > 0) {
                 await waitMs(DIRECT_SAVE_SYNC_POLL_MS);
             }
             await refreshDirectState();
-            const version = Number(directSession && directSession.state ? directSession.state.version : 0);
-            const savePending = !!(directSession && directSession.state && directSession.state.savePending);
-            if (version > persistedBefore && !savePending) {
-                await syncDirectAutosaveToKin();
+            if (await trySyncFromConnector()) {
                 return;
             }
         }
+
+        log('Direct save: connector version did not advance; requesting Document Server force-save...');
+        try {
+            await ensureDirectSessionFlushed();
+        } catch (error) {
+            const state = directSessionState() || {};
+            const callbackHint = state.lastCallbackStatus != null
+                ? (' last callback status ' + state.lastCallbackStatus)
+                : '';
+            const message = (error && error.message ? error.message : String(error)) + callbackHint;
+            log('Editor reported saved but Kin could not confirm connector save:', message);
+            if (currentKinPath) {
+                await openAlert(
+                    'ONLYOFFICE reported saved, but the file on Kin was not updated.\n\n' +
+                    message +
+                    '\n\nUse File → Save to retry. Server logs: journalctl -u kin-office | grep direct-connector',
+                    'Save failed'
+                );
+            }
+            return;
+        }
+
+        await refreshDirectState();
+        if (await trySyncFromConnector()) {
+            return;
+        }
+
         log('Editor reported saved but connector session version did not advance (check onlyoffice-direct logs)');
+        if (currentKinPath) {
+            await openAlert(
+                'ONLYOFFICE reported saved, but Kin did not receive the updated document.\n\n' +
+                'Use File → Save to retry.',
+                'Save failed'
+            );
+        }
     }
 
     function startDirectStatePolling() {
@@ -1379,7 +1439,7 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function promptDirectSaveAsForNewDocument(reason) {
         if (!directMode || currentKinPath || !directSessionId() || directSaveAsPromptOpen) return;
-        const version = Number(directSession && directSession.version ? directSession.version : 0);
+        const version = directSessionVersion();
         if (version && directLastPromptedVersion === version) return;
         directSaveAsPromptOpen = true;
         directLastPromptedVersion = version;

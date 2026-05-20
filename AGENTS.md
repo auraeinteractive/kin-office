@@ -101,6 +101,8 @@ docker compose up -d --build
 sudo systemctl start|stop|restart|reload kin-office
 sudo service kin-office start|stop|restart|reload
 
+**Production upgrade (no manual docker on the server):** `sudo apt install ./kin-office_*.deb` (or `apt upgrade`) runs `postinst`, which restarts `kin-office.service`. The wrapper runs `docker compose up -d --build` (including `onlyoffice-direct`), then `deploy.sh --deploy-mode` (nginx module, OIDC, Nextcloud). You do not need to `cd /opt/kin/modules/kin-office` or run compose by hand unless debugging.
+
 # Deploy mode: read hostname from /etc/kin/config.ini, use port 443
 ./deploy.sh --deploy-mode
 ```

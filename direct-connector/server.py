@@ -368,8 +368,6 @@ def resolve_document_fetch_url(url):
         "onlyoffice",
         "onlyofficedocs",
         "onlyoffice-direct",
-        "localhost",
-        "127.0.0.1",
     }
     if (parsed.hostname or "").lower() in internal_hosts:
         return raw
@@ -559,13 +557,14 @@ class Handler(BaseHTTPRequestHandler):
                 if not session:
                     self.send_json(404, {"response": "fail", "message": "Session not found."})
                     return
-                session["save_pending"] = True
                 status, text = post_command({"c": "forcesave", "key": session["document_key"]})
                 parsed = None
                 try:
                     parsed = json.loads(text)
                 except Exception:
                     parsed = None
+                if parsed and parsed.get("error") == 0:
+                    session["save_pending"] = True
                 self.send_json(200, {
                     "response": "success",
                     "status": status,
@@ -596,7 +595,11 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         content = fetch_url(str(callback.get("url")))
                     except Exception as error:
-                        print("direct-connector: callback download failed: %s" % error, flush=True)
+                        print(
+                            "direct-connector: callback download failed session=%s url=%s error=%s"
+                            % (match.group(1), callback.get("url"), error),
+                            flush=True,
+                        )
                         self.send_json(200, {"error": 1})
                         return
                     if not content:

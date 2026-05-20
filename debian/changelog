@@ -1,3 +1,22 @@
+kin-office (1.0.9-1) stable; urgency=high
+
+  * direct-connector: rewrite loopback Document Server save URLs to internal
+    onlyoffice (fixes callback download failures); only set save_pending when
+    forcesave is accepted.
+  * office apps: on editor "saved", force-save and sync to Kin when callback
+    is slow; show Save failed dialog instead of silent log only.
+
+ -- Kin <packages@os-kin.com>  Wed, 20 May 2026 23:00:00 +0000
+
+kin-office (1.0.8-1) stable; urgency=medium
+
+  * kin-office-wrapper: docker compose up --build on start/restart so apt
+    upgrades refresh onlyoffice-direct without manual compose on the server.
+  * nginx: OnlyOffice service worker stub via internal location (nginx 1.24+
+    rejects default_type inside if).
+
+ -- Kin <packages@os-kin.com>  Wed, 20 May 2026 22:30:00 +0000
+
 kin-office (1.0.7-1) stable; urgency=medium
 
   * deploy: clear Nextcloud brute-force throttles automatically on each

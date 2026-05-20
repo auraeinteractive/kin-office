@@ -86,13 +86,14 @@ start_containers() {
     fi
 
     echo "Starting kin-office containers (first start may pull large images; see journalctl -u kin-office -f)..."
+    # --build: after apt upgrade, onlyoffice-direct must pick up /opt/kin/modules/kin-office/direct-connector.
+    # Hub images (nextcloud, onlyoffice) are unchanged by --build when they have no build: section.
     # --wait is Compose v2 only; legacy docker-compose v1 will error on it.
-    # Omit --build on routine restarts; compose still builds images that are missing.
     if [[ "${DOCKER_COMPOSE[0]}" == "docker" && "${DOCKER_COMPOSE[1]}" == "compose" ]]; then
-        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --wait --timeout 180 "${services[@]}"
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180 "${services[@]}"
     else
         echo "WARNING: using docker-compose without --wait; containers may still be starting."
-        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d "${services[@]}"
+        "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build "${services[@]}"
     fi
 }
 
