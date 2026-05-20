@@ -27,10 +27,6 @@ EDITOR_HTML = Path(__file__).with_name("editor.html").read_text(encoding="utf-8"
 
 SESSIONS = {}
 
-# ONLYOFFICE serves web-apps under /{major.minor.patch-buildhash}/ (e.g. 9.3.1-796faf31…).
-DS_BUILD_SEGMENT_RE = re.compile(r"/([0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{10,})/", re.I)
-_DS_BUILD_CACHE = {"segment": "", "expires": 0.0}
-
 
 def now():
     return int(time.time())
@@ -202,89 +198,6 @@ def public_base(handler):
     if prefix and not prefix.startswith("/"):
         prefix = "/" + prefix
     return f"{proto}://{host}{prefix}/direct"
-
-
-def _extract_build_segment_from_text(value):
-    if not value:
-        return ""
-    match = DS_BUILD_SEGMENT_RE.search(str(value))
-    return match.group(1) if match else ""
-
-
-def _extract_build_segment_from_probe(url):
-    try:
-        request = urllib.request.Request(
-            url,
-            headers={"User-Agent": "kin-onlyoffice-direct/1.0"},
-            method="GET",
-        )
-        with urllib.request.urlopen(request, timeout=15) as response:
-            segment = _extract_build_segment_from_text(response.geturl())
-            if segment:
-                return segment
-            if str(url).endswith("/"):
-                body = response.read(16384).decode("utf-8", errors="ignore")
-                return _extract_build_segment_from_text(body)
-    except urllib.error.HTTPError as error:
-        segment = _extract_build_segment_from_text(error.headers.get("Location", ""))
-        if segment:
-            return segment
-    except Exception as error:
-        print("direct-connector: DS probe %s failed: %s" % (url, error), flush=True)
-    return ""
-
-
-def discover_document_server_build_segment():
-    """Resolve ONLYOFFICE path segment (version-buildhash) via internal Document Server."""
-    if _DS_BUILD_CACHE.get("segment") and _DS_BUILD_CACHE.get("expires", 0.0) > time.time():
-        return _DS_BUILD_CACHE["segment"]
-
-    override = os.environ.get("DOCUMENT_SERVER_BUILD_SEGMENT", "").strip().strip("/")
-    if override:
-        _DS_BUILD_CACHE["segment"] = override
-        _DS_BUILD_CACHE["expires"] = time.time() + 86400
-        return override
-
-    internal_base = DOCUMENT_SERVER_INTERNAL_URL.rstrip("/")
-    for probe in (internal_base + "/", internal_base + "/web-apps/apps/api/documents/api.js"):
-        segment = _extract_build_segment_from_probe(probe)
-        if segment:
-            _DS_BUILD_CACHE["segment"] = segment
-            _DS_BUILD_CACHE["expires"] = time.time() + 3600
-            print("direct-connector: discovered DS build segment %s" % segment, flush=True)
-            return segment
-
-    print("direct-connector: WARNING: could not discover DS build segment; api.js URL may 404", flush=True)
-    _DS_BUILD_CACHE["expires"] = time.time() + 60
-    return ""
-
-
-def kin_office_ds_public_prefix(handler):
-    """Browser path prefix for Document Server: /kin-office/ds/{build} (from proxy headers)."""
-    forwarded = (handler.headers.get("X-Forwarded-Prefix") or "").strip().rstrip("/")
-    if forwarded and not forwarded.startswith("/"):
-        forwarded = "/" + forwarded
-    kin_root = forwarded or "/kin-office"
-    ds_prefix = kin_root.rstrip("/") + "/ds"
-    build = discover_document_server_build_segment()
-    if build:
-        ds_prefix = ds_prefix + "/" + build
-    return ds_prefix
-
-
-def document_server_api_url(handler):
-    """Absolute URL to api.js including ONLYOFFICE build segment (required behind /kin-office/ds/)."""
-    api_path = kin_office_ds_public_prefix(handler).rstrip("/") + "/web-apps/apps/api/documents/api.js"
-    if DOCUMENT_SERVER_PUBLIC_URL.startswith(("http://", "https://")):
-        base = DOCUMENT_SERVER_PUBLIC_URL.rstrip("/")
-        build = discover_document_server_build_segment()
-        if build and ("/%s/" % build) not in base and not base.endswith("/%s" % build):
-            base = base + "/" + build
-        api_path = base.rstrip("/") + "/web-apps/apps/api/documents/api.js"
-        return api_path
-    proto = handler.headers.get("X-Forwarded-Proto") or "https"
-    host = handler.headers.get("X-Forwarded-Host") or handler.headers.get("Host") or "localhost"
-    return "%s://%s%s" % (proto, host, api_path)
 
 
 def session_public_urls(handler, session):
@@ -567,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                 session["last_seen"] = now()
                 self.send_json(200, {
                     "response": "success",
-                    "api_url": document_server_api_url(self),
+                    "api_url": DOCUMENT_SERVER_PUBLIC_URL + "web-apps/apps/api/documents/api.js",
                     "config": make_config(self, session),
                 })
                 return

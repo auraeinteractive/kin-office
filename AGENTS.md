@@ -17,7 +17,6 @@ Set up Nextcloud to run in Docker and expose it through Kin's nginx reverse prox
 - **When Nextcloud shows "Login is invalid because files already exist"** - The admin password in docker-compose.yml doesn't match existing data; either use the original password or accept that data may need re-setup
 - **kinnextcloud app (admin)** - Requires a fresh browser session (incognito/private window) to login as admin, because OIDC remembers the user session
 - **Never hardcode hostnames** - Do not embed production or customer FQDNs in source, nginx, or app code. Use `window.location.origin`, `[KinCore] hostname=` from `/etc/kin/config.ini`, `.config.ini` overrides, or deploy-time env vars (`KIN_OIDC_HOST`, `KIN_PUBLIC_BASE_URL`, proxy `X-Forwarded-*` headers).
-- **ONLYOFFICE service worker** - Do not use `^~` on `${prefix}/ds/` in nginx: it prevents the regex location that serves `nginx/onlyoffice-noop-sw.js` instead of Document Server’s broken `document_editor_service_worker.js`. After deploy, users may need to unregister old workers once (browser Application → Service Workers).
 
 ## Technical Decisions
 
