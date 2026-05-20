@@ -12,7 +12,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlparse, urlunparse
 
 
 HOST = os.environ.get("DIRECT_CONNECTOR_HOST", "0.0.0.0")
@@ -366,9 +366,42 @@ def join_session(data):
     return session
 
 
+def resolve_document_fetch_url(url):
+    """Rewrite public Document Server URLs to the internal onlyoffice service (Docker)."""
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    parsed = urlparse(raw)
+    if not parsed.scheme:
+        return raw
+    internal = urlparse(DOCUMENT_SERVER_INTERNAL_URL)
+    internal_hosts = {
+        (internal.hostname or "onlyoffice").lower(),
+        "onlyoffice",
+        "onlyofficedocs",
+        "onlyoffice-direct",
+        "localhost",
+        "127.0.0.1",
+    }
+    if (parsed.hostname or "").lower() in internal_hosts:
+        return raw
+    path = parsed.path or "/"
+    path = re.sub(r"^/kin-office/ds(?=/|$)", "", path, flags=re.I)
+    path = re.sub(r"^/ds(?=/|$)", "", path, flags=re.I)
+    if not path.startswith("/"):
+        path = "/" + path
+    netloc = internal.hostname or "onlyoffice"
+    if internal.port:
+        netloc = "%s:%s" % (netloc, internal.port)
+    rewritten = urlunparse((internal.scheme or "http", netloc, path, "", parsed.query, ""))
+    print("direct-connector: rewrite save fetch %s -> %s" % (raw, rewritten), flush=True)
+    return rewritten
+
+
 def fetch_url(url):
     context = ssl._create_unverified_context()
-    request = urllib.request.Request(url, headers={"User-Agent": "kin-onlyoffice-direct/1.0"})
+    target = resolve_document_fetch_url(url)
+    request = urllib.request.Request(target, headers={"User-Agent": "kin-onlyoffice-direct/1.0"})
     with urllib.request.urlopen(request, timeout=60, context=context) as response:
         return response.read()
 
@@ -560,18 +593,36 @@ class Handler(BaseHTTPRequestHandler):
                 if not session:
                     self.send_json(200, {"error": 0})
                     return
-                session["last_callback_status"] = callback.get("status")
-                session["last_callback_at"] = now()
                 status = callback.get("status")
+                session["last_callback_status"] = status
+                session["last_callback_at"] = now()
+                print(
+                    "direct-connector: callback session=%s status=%s url=%s"
+                    % (match.group(1), status, callback.get("url") or ""),
+                    flush=True,
+                )
+                if status in (3, 7):
+                    self.send_json(200, {"error": 1})
+                    return
                 if status in (2, 6) and callback.get("url"):
-                    content = fetch_url(str(callback.get("url")))
-                    if content:
-                        session["content"] = content
-                        session["version"] += 1
-                        session["last_saved_at"] = now()
-                        session["save_pending"] = False
-                elif status in (1, 4):
+                    try:
+                        content = fetch_url(str(callback.get("url")))
+                    except Exception as error:
+                        print("direct-connector: callback download failed: %s" % error, flush=True)
+                        self.send_json(200, {"error": 1})
+                        return
+                    if not content:
+                        print("direct-connector: callback download returned empty body", flush=True)
+                        self.send_json(200, {"error": 1})
+                        return
+                    session["content"] = content
+                    session["version"] += 1
+                    session["last_saved_at"] = now()
+                    session["save_pending"] = False
+                elif status == 1:
                     session["save_pending"] = True
+                elif status == 4:
+                    session["save_pending"] = False
                 self.send_json(200, {"error": 0})
                 return
             self.send_json(404, {"response": "fail", "message": "Not found."})

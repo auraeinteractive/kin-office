@@ -888,6 +888,10 @@ rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaul
 safe_urls = list(rd.get('safeUrls', []))
 if 'http://onlyoffice-direct:8000/' not in safe_urls:
     safe_urls.append('http://onlyoffice-direct:8000/')
+if 'http://onlyoffice/' not in safe_urls:
+    safe_urls.append('http://onlyoffice/')
+if 'http://onlyofficedocs/' not in safe_urls:
+    safe_urls.append('http://onlyofficedocs/')
 if rd.get('rejectUnauthorized') is not False or 'onlyoffice-direct:8000' not in str(rd.get('safeUrls', [])):
     c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False, safeUrls=safe_urls)
     with open(p,'w') as f: json.dump(c,f,indent=2)
@@ -1125,6 +1129,10 @@ rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaul
 safe_urls = list(rd.get('safeUrls', []))
 if 'http://onlyoffice-direct:8000/' not in safe_urls:
     safe_urls.append('http://onlyoffice-direct:8000/')
+if 'http://onlyoffice/' not in safe_urls:
+    safe_urls.append('http://onlyoffice/')
+if 'http://onlyofficedocs/' not in safe_urls:
+    safe_urls.append('http://onlyofficedocs/')
 if rd.get('rejectUnauthorized') is not False or 'onlyoffice-direct:8000' not in str(rd.get('safeUrls', [])):
     c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False, safeUrls=safe_urls)
     with open(p,'w') as f: json.dump(c,f,indent=2)

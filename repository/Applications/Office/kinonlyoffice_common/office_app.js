@@ -86,8 +86,10 @@ function shellQuote(value) {
 
 /** Upper bound for blank OOXML templates from direct-connector (with margin). */
 const OFFICE_SKELETON_MAX = { docx: 1200, xlsx: 1900, pptx: 7500 };
-const DIRECT_FLUSH_POLL_MS = 400;
-const DIRECT_FLUSH_MAX_POLLS = 8;
+const DIRECT_FLUSH_POLL_MS = 500;
+const DIRECT_FLUSH_MAX_POLLS = 20;
+const DIRECT_SAVE_SYNC_POLLS = 15;
+const DIRECT_SAVE_SYNC_POLL_MS = 400;
 /** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
 
@@ -1264,13 +1266,14 @@ export function bootstrapOnlyOfficeApp(config) {
             const stateResponse = await refreshDirectState();
             const state = stateResponse && stateResponse.state ? stateResponse.state : null;
             const nextVersion = Number(state && state.version ? state.version : 0);
+            const savePending = !!(state && state.savePending);
             if (!currentKinPath) {
-                if (nextVersion > beforeVersion) {
+                if (nextVersion > beforeVersion && !savePending) {
                     await promptDirectSaveAsForNewDocument('connector-save');
                 }
                 return;
             }
-            if (nextVersion > beforeVersion) {
+            if (nextVersion > beforeVersion && !savePending) {
                 await saveDirectSessionToKinPath(currentKinPath);
                 log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
             } else if (directSession && directSession.info) {
@@ -1283,6 +1286,23 @@ export function bootstrapOnlyOfficeApp(config) {
         } finally {
             directSyncing = false;
         }
+    }
+
+    async function syncAfterEditorReportedSaved() {
+        const persistedBefore = directLastPersistedVersion;
+        for (let index = 0; index < DIRECT_SAVE_SYNC_POLLS; index += 1) {
+            if (index > 0) {
+                await waitMs(DIRECT_SAVE_SYNC_POLL_MS);
+            }
+            await refreshDirectState();
+            const version = Number(directSession && directSession.state ? directSession.state.version : 0);
+            const savePending = !!(directSession && directSession.state && directSession.state.savePending);
+            if (version > persistedBefore && !savePending) {
+                await syncDirectAutosaveToKin();
+                return;
+            }
+        }
+        log('Editor reported saved but connector session version did not advance (check onlyoffice-direct logs)');
     }
 
     function startDirectStatePolling() {
@@ -1622,7 +1642,13 @@ export function bootstrapOnlyOfficeApp(config) {
             return;
         }
         if (data.event === 'documentStateChange') {
-            syncDirectAutosaveToKin();
+            if (data.changed === false) {
+                syncAfterEditorReportedSaved().catch(function(error) {
+                    log('Post-save Kin sync failed:', error && error.message ? error.message : error);
+                });
+            } else {
+                syncDirectAutosaveToKin();
+            }
             return;
         }
         if (data.event === 'editorKeydown') {
