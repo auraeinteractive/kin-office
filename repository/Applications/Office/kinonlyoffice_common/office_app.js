@@ -1083,7 +1083,9 @@ export function bootstrapOnlyOfficeApp(config) {
         await writeKinBinaryFile(targetKinPath, bytes);
         currentKinPath = targetKinPath;
         if (directSession && directSession.info) {
-            await writeKinOnlyOfficeInfo(targetKinPath, directSession.info);
+            writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
+                log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
+            });
         }
         requestWorkspaceRefresh();
     }
@@ -1106,7 +1108,9 @@ export function bootstrapOnlyOfficeApp(config) {
                 await saveDirectSessionToKinPath(currentKinPath, { skipForceSave: true });
                 log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
             } else if (directSession && directSession.info) {
-                await writeKinOnlyOfficeInfo(currentKinPath, directSession.info);
+                writeKinOnlyOfficeInfo(currentKinPath, directSession.info).catch(function(err) {
+                    log('writeKinOnlyOfficeInfo (autosave) failed:', err && err.message ? err.message : err);
+                });
             }
         } catch (error) {
             log('Direct autosave sync failed:', error && error.message ? error.message : error);
@@ -1153,7 +1157,9 @@ export function bootstrapOnlyOfficeApp(config) {
         });
         currentKinPath = kinPath;
         if (session.info) {
-            await writeKinOnlyOfficeInfo(kinPath, session.info);
+            writeKinOnlyOfficeInfo(kinPath, session.info).catch(function(err) {
+                log('writeKinOnlyOfficeInfo (open) failed:', err && err.message ? err.message : err);
+            });
         }
         await openDirectEditor(session);
         return true;
