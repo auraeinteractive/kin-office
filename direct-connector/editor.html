@@ -96,6 +96,15 @@
                 return;
             }
 
+            if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+                try {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map(function(reg) { return reg.unregister(); }));
+                } catch (_swError) {
+                    // ignore
+                }
+            }
+
             await loadScript(payload.api_url);
             if (!window.DocsAPI || !window.DocsAPI.DocEditor) {
                 fail('ONLYOFFICE API did not initialize.');

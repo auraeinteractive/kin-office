@@ -200,6 +200,18 @@ def public_base(handler):
     return f"{proto}://{host}{prefix}/direct"
 
 
+def document_server_api_url(handler):
+    """Browser-facing Document Server URL (Kin /kin-office/ds/), derived from proxy headers."""
+    if DOCUMENT_SERVER_PUBLIC_URL.startswith("http://") or DOCUMENT_SERVER_PUBLIC_URL.startswith("https://"):
+        return DOCUMENT_SERVER_PUBLIC_URL + "web-apps/apps/api/documents/api.js"
+    proto = handler.headers.get("X-Forwarded-Proto") or "https"
+    host = handler.headers.get("X-Forwarded-Host") or handler.headers.get("Host") or "localhost"
+    prefix = (handler.headers.get("X-Forwarded-Prefix") or "/kin-office").strip().rstrip("/")
+    if prefix and not prefix.startswith("/"):
+        prefix = "/" + prefix
+    return f"{proto}://{host}{prefix}/ds/web-apps/apps/api/documents/api.js"
+
+
 def session_public_urls(handler, session):
     base = public_base(handler)
     document_base = DOCUMENT_BASE_URL or base
@@ -447,7 +459,7 @@ class Handler(BaseHTTPRequestHandler):
                 session["last_seen"] = now()
                 self.send_json(200, {
                     "response": "success",
-                    "api_url": DOCUMENT_SERVER_PUBLIC_URL + "web-apps/apps/api/documents/api.js",
+                    "api_url": document_server_api_url(self),
                     "config": make_config(self, session),
                 })
                 return

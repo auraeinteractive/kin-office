@@ -156,14 +156,19 @@ export function bootstrapOnlyOfficeApp(config) {
 
     const ORIGIN = window.location.origin;
     const params = new URLSearchParams(window.location.search);
-    const NEXTCLOUD_ORIGIN = resolveNextcloudOrigin(params);
+    const KIN_OFFICE_BASE = resolveKinOfficeBase(params);
     const nextcloudVolumeLabel = normalizeVolumeLabel(params.get('kin_nextcloud_volume') || params.get('nextcloud_volume') || 'Nextcloud');
     const nextcloudAssignTarget = String(params.get('kin_nextcloud_assign_target') || 'Home:.Mounts/nextcloud');
     const dialogInitialPath = 'Mountlist:';
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
-    const modeParam = String(params.get('onlyoffice_mode') || params.get('kin_onlyoffice_mode') || '').toLowerCase();
-    const directMode = modeParam === 'direct' || params.get('onlyoffice_direct') === '1' || params.get('kin_onlyoffice_direct') === '1';
-    const directOrigin = String(params.get('onlyoffice_direct_origin') || params.get('kin_onlyoffice_direct_origin') || NEXTCLOUD_ORIGIN).replace(/\/+$/, '');
+    /* Kin office apps always use the direct connector + Kin /api/file/* — never a Nextcloud iframe. */
+    const directMode = true;
+    const directOrigin = String(
+        params.get('onlyoffice_direct_origin') ||
+        params.get('kin_onlyoffice_direct_origin') ||
+        params.get('kin_office_base') ||
+        KIN_OFFICE_BASE
+    ).replace(/\/+$/, '');
     const directApiBase = directOrigin + '/direct/api';
 
     const MENU_OPEN_COMMAND = appConfig.menuPrefix + '.open';
@@ -298,13 +303,6 @@ export function bootstrapOnlyOfficeApp(config) {
                 { name: 'Log out', command: MENU_LOGOUT_COMMAND }
             ]
         };
-        if (!directMode) {
-            menus.Storage = [
-                { name: 'Connect Nextcloud volume', command: MENU_STORAGE_CONNECT_COMMAND },
-                { name: 'Nextcloud volume status', command: MENU_STORAGE_STATUS_COMMAND },
-                { name: 'Disconnect Nextcloud volume', command: MENU_STORAGE_DISCONNECT_COMMAND }
-            ];
-        }
         postToParent({
             kinAppRegisterMenus: true,
             instanceId,
@@ -1496,23 +1494,7 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function openKinPath(kinPath) {
-        if (directMode) {
-            await openDirectKinPath(kinPath);
-            return true;
-        }
-
-        const nextcloudPath = toNextcloudPath(kinPath, nextcloudVolumeLabel);
-        if (nextcloudPath) {
-            currentKinPath = kinPath;
-            await openNextcloudPath(nextcloudPath);
-            startAutosavePolling();
-            return true;
-        }
-
-        const importedPath = await importKinFileToNextcloud(kinPath);
-        currentKinPath = kinPath;
-        await openNextcloudPath(importedPath);
-        startAutosavePolling();
+        await openDirectKinPath(kinPath);
         return true;
     }
 
@@ -1533,124 +1515,42 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function handleMenuCommand(command) {
         if (command === MENU_LOGOUT_COMMAND) {
-            stopBridgeHeartbeat();
-            if (directMode) {
-                stopDirectStatePolling();
-                await openAlert('Direct ONLYOFFICE sessions are closed by closing the window.', 'OnlyOffice');
-                return;
-            }
-            sendToBridge('kinBridgeLogout');
+            stopDirectStatePolling();
+            await openAlert('ONLYOFFICE sessions end when you close this window.', 'OnlyOffice');
             return;
         }
         try {
-            if (directMode) {
-                if (command === MENU_OPEN_COMMAND) {
-                    const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
-                    await withBusy('Opening document...', async function() {
-                        await openDirectKinPath(kinPath);
-                    });
-                    return;
-                }
-
-                if (command === MENU_SAVE_COMMAND) {
-                    if (!directSessionId()) {
-                        await openAlert('Open a document first, then use Save.');
-                        return;
-                    }
-                    if (!currentKinPath) {
-                        await directSaveAs(appConfig.defaultFilename);
-                        return;
-                    }
-                    await withBusy('Saving to Kin path...', async function() {
-                        await saveDirectSessionToKinPath(currentKinPath);
-                    });
-                    return;
-                }
-
-                if (command === MENU_SAVE_AS_COMMAND) {
-                    if (!directSessionId()) {
-                        await openAlert('Open a document first, then use Save As.');
-                        return;
-                    }
-                    const defaultName = currentKinPath ? kinPathBaseName(currentKinPath) : appConfig.defaultFilename;
-                    await directSaveAs(defaultName);
-                    return;
-                }
-
-                return;
-            }
-
             if (command === MENU_OPEN_COMMAND) {
                 const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
                 await withBusy('Opening document...', async function() {
-                    await openKinPath(kinPath);
+                    await openDirectKinPath(kinPath);
                 });
-                return;
-            }
-
-            if (command === MENU_STORAGE_CONNECT_COMMAND) {
-                await connectNextcloudVolume();
-                return;
-            }
-
-            if (command === MENU_STORAGE_STATUS_COMMAND) {
-                await showNextcloudVolumeStatus();
-                return;
-            }
-
-            if (command === MENU_STORAGE_DISCONNECT_COMMAND) {
-                await disconnectNextcloudVolume();
                 return;
             }
 
             if (command === MENU_SAVE_COMMAND) {
-                const context = await getOnlyOfficeContext();
-                const sourcePath = context && context.filePath ? String(context.filePath) : currentOnlyOfficePath;
-                const currentKinIsExternal = currentKinPath && !toNextcloudPath(currentKinPath, nextcloudVolumeLabel);
-                log('MENU_SAVE_COMMAND: sourcePath=', sourcePath, 'currentKinPath=', currentKinPath, 'currentKinIsExternal=', currentKinIsExternal);
-                if (currentKinIsExternal && sourcePath) {
-                    try {
-                        await withBusy('Saving to Kin path...', async function() {
-                            await saveNextcloudFileToKinPath(sourcePath, currentKinPath);
-                        });
-                    } catch (saveError) {
-                        log('Save to Kin failed:', saveError && saveError.message ? saveError.message : saveError);
-                        await openAlert('Save failed: ' + (saveError && saveError.message ? saveError.message : String(saveError)), 'Error');
-                    }
+                if (!directSessionId()) {
+                    await openAlert('Open a document first, then use Save.');
+                    return;
                 }
+                if (!currentKinPath) {
+                    await directSaveAs(appConfig.defaultFilename);
+                    return;
+                }
+                await withBusy('Saving to Kin path...', async function() {
+                    await saveDirectSessionToKinPath(currentKinPath);
+                });
                 return;
             }
 
             if (command === MENU_SAVE_AS_COMMAND) {
-                const context = await getOnlyOfficeContext();
-                const sourcePath = context && context.filePath ? String(context.filePath) : currentOnlyOfficePath;
-                if (!sourcePath) {
-                    await openAlert('Open a Nextcloud document first, then use Save As.');
+                if (!directSessionId()) {
+                    await openAlert('Open a document first, then use Save As.');
                     return;
                 }
-                const defaultName = splitNextcloudPath(sourcePath).name || appConfig.defaultFilename;
-                const targetKinPath = await requestFileDialog({
-                    mode: 'save',
-                    initialPath: dialogInitialPath,
-                    defaultFilename: defaultName
-                });
-                const targetPath = toNextcloudPath(targetKinPath, nextcloudVolumeLabel);
-                if (!targetPath) {
-                    await withBusy('Saving to Kin path...', async function() {
-                        await saveNextcloudFileToKinPath(sourcePath, targetKinPath);
-                    });
-                    currentKinPath = targetKinPath;
-                    startAutosavePolling();
-                    return;
-                }
-                await withBusy('Saving copy in Nextcloud...', async function() {
-                    await copyNextcloudFile(sourcePath, targetPath);
-                });
-                currentKinPath = targetKinPath;
-                startAutosavePolling();
-                await withBusy('Opening saved file...', async function() {
-                    await openNextcloudPath(targetPath);
-                });
+                const defaultName = currentKinPath ? kinPathBaseName(currentKinPath) : appConfig.defaultFilename;
+                await directSaveAs(defaultName);
+                return;
             }
         } catch (error) {
             if (error && error.message === 'cancel') return;
@@ -1711,7 +1611,7 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function handleDirectOnlyOfficeEvent(data) {
-        if (!directMode || !data) return;
+        if (!data) return;
         if (data.sessionId && directSessionId() && String(data.sessionId) !== directSessionId()) {
             return;
         }
@@ -1865,28 +1765,18 @@ export function bootstrapOnlyOfficeApp(config) {
     });
 
     registerMenus();
-    if (directMode) {
-        if (kinOpenPath) {
-            withBusy('Opening document...', async function() {
-                await openDirectKinPath(kinOpenPath);
-            }).catch(function(error) {
-                openAlert('Could not open requested file:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
-            });
-        } else {
-            withBusy('Creating document...', async function() {
-                await openDirectBlankDocument();
-            }).catch(function(error) {
-                openAlert('Could not create document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
-            });
-        }
+    if (kinOpenPath) {
+        withBusy('Opening document...', async function() {
+            await openDirectKinPath(kinOpenPath);
+        }).catch(function(error) {
+            openAlert('Could not open requested file:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+        });
     } else {
-        iframeEl.onload = function() {
-            sendToBridge('kinBridgeHandshake');
-            sendToBridge('kinBridgeGetStatus');
-        };
-
-        var initialPath = kinOpenPath ? '/index.php/apps/dashboard/' : appConfig.targetPath;
-        iframeEl.src = NEXTCLOUD_ORIGIN + initialPath;
+        withBusy('Creating document...', async function() {
+            await openDirectBlankDocument();
+        }).catch(function(error) {
+            openAlert('Could not create document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+        });
     }
 }
 
@@ -1903,23 +1793,10 @@ function trimTrailingSlash(value) {
     return String(value || '').replace(/\/+$/, '');
 }
 
-function resolveNextcloudOrigin(params) {
-    const originOverride = params.get('nextcloud_origin') || params.get('nextcloudOrigin');
-    if (originOverride) {
-        return trimTrailingSlash(originOverride);
+function resolveKinOfficeBase(params) {
+    const baseOverride = params.get('kin_office_base') || params.get('kin_office_origin');
+    if (baseOverride) {
+        return trimTrailingSlash(baseOverride);
     }
-
-    const hostOverride = params.get('nextcloud_host') || params.get('nextcloudHost');
-    if (hostOverride) {
-        const port = params.get('nextcloud_port') || params.get('nextcloudPort') || '443';
-        return 'https://' + hostOverride + ':' + port;
-    }
-
-    try {
-        localStorage.removeItem('kin.nextcloud.host');
-    } catch (_error) {
-        // ignore storage failures
-    }
-
     return trimTrailingSlash(window.location.origin) + '/kin-office';
 }

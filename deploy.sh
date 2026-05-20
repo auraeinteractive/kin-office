@@ -360,10 +360,10 @@ location = ${prefix}/kin-bridge-admin.js {
 }
 
 location ^~ ${prefix}/ds/ {
-    if (\$uri ~ document_editor_service_worker\\.js$) {
+    if (\$uri ~ document_editor_service_worker\\.js) {
         default_type application/javascript;
         add_header Cache-Control "no-cache";
-        return 200 'self.addEventListener("install",function(){self.skipWaiting()});self.addEventListener("activate",function(){self.clients.claim()});';
+        return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){self.clients.claim()});';
     }
     proxy_pass http://127.0.0.1:5003/;
     include snippets/proxy-common.conf;
@@ -486,10 +486,10 @@ location = ${prefix}/kin-bridge-admin.js {
 }
 
 location ^~ ${prefix}/ds/ {
-    if (\$uri ~ document_editor_service_worker\\.js\$) {
+    if (\$uri ~ document_editor_service_worker\\.js) {
         default_type application/javascript;
         add_header Cache-Control "no-cache";
-        return 200 'self.addEventListener("install",function(){self.skipWaiting()});self.addEventListener("activate",function(){self.clients.claim()});';
+        return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){self.clients.claim()});';
     }
     proxy_pass http://127.0.0.1:5003/;
     proxy_set_header Host \$host;
@@ -634,10 +634,10 @@ location = ${prefix}/kin-bridge-admin.js {
 }
 
 location ^~ ${prefix}/ds/ {
-    if (\$uri ~ document_editor_service_worker\\.js\$) {
+    if (\$uri ~ document_editor_service_worker\\.js) {
         default_type application/javascript;
         add_header Cache-Control "no-cache";
-        return 200 'self.addEventListener("install",function(){self.skipWaiting()});self.addEventListener("activate",function(){self.clients.claim()});';
+        return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){self.clients.claim()});';
     }
     proxy_pass http://127.0.0.1:5003/;
     proxy_set_header Host \$host;
