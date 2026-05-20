@@ -1318,6 +1318,11 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function openKinPath(kinPath) {
+        if (directMode) {
+            await openDirectKinPath(kinPath);
+            return true;
+        }
+
         const nextcloudPath = toNextcloudPath(kinPath, nextcloudVolumeLabel);
         if (nextcloudPath) {
             currentKinPath = kinPath;

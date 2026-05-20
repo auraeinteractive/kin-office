@@ -643,6 +643,24 @@ location ^~ ${prefix}/ds/ {
     sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}})</script></head>';
 }
 
+location ^~ ${prefix}/direct/ {
+    proxy_pass http://127.0.0.1:8000/direct/;
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Host \$host;
+    proxy_set_header X-Forwarded-Port \$server_port;
+    proxy_set_header X-Forwarded-Prefix ${prefix};
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection \$http_connection;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    proxy_buffering off;
+    proxy_set_header Accept-Encoding "";
+}
+
 location ^~ ${prefix}/ {
     proxy_pass http://127.0.0.1:8081/;
     proxy_set_header Host \$host;
@@ -845,16 +863,20 @@ if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
     docker exec --user www-data nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://onlyofficedocs/" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value="http://nextcloud/" 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value="true" 2>/dev/null || true
+    docker exec --user www-data nextcloud php occ config:app:delete onlyoffice jwt_secret 2>/dev/null || true
     docker exec --user www-data nextcloud php occ config:app:delete onlyoffice settings_error 2>/dev/null || true
     docker exec onlyoffice python3 -c "
 import json
 p = '/etc/onlyoffice/documentserver/local.json'
 with open(p) as f: c = json.load(f)
 rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaults',{})
-if rd.get('rejectUnauthorized') is not False:
-    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False)
+safe_urls = list(rd.get('safeUrls', []))
+if 'http://onlyoffice-direct:8000/' not in safe_urls:
+    safe_urls.append('http://onlyoffice-direct:8000/')
+if rd.get('rejectUnauthorized') is not False or 'onlyoffice-direct:8000' not in str(rd.get('safeUrls', [])):
+    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False, safeUrls=safe_urls)
     with open(p,'w') as f: json.dump(c,f,indent=2)
-    print('  Updated local.json (rejectUnauthorized=false)')
+    print('  Updated local.json (rejectUnauthorized=false, safeUrls includes onlyoffice-direct)')
 else:
     print('  local.json already has rejectUnauthorized=false')
 " 2>/dev/null || true
@@ -1076,6 +1098,7 @@ docker exec --user www-data nextcloud php occ config:app:set onlyoffice Document
 echo "deploy.sh: OnlyOffice StorageUrl (DS→Nextcloud) and verify_peer_off (dev/TLS)..."
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice StorageUrl --value="http://nextcloud/" 2>/dev/null || true
 docker exec --user www-data nextcloud php occ config:app:set onlyoffice verify_peer_off --value="true" 2>/dev/null || true
+docker exec --user www-data nextcloud php occ config:app:delete onlyoffice jwt_secret 2>/dev/null || true
 docker exec --user www-data nextcloud php occ config:app:delete onlyoffice settings_error 2>/dev/null || true
 
 echo "deploy.sh: Configuring Document Server to accept self-signed certificates..."
@@ -1084,10 +1107,13 @@ import json, sys
 p = '/etc/onlyoffice/documentserver/local.json'
 with open(p) as f: c = json.load(f)
 rd = c.setdefault('services',{}).setdefault('CoAuthoring',{}).get('requestDefaults',{})
-if rd.get('rejectUnauthorized') is not False:
-    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False)
+safe_urls = list(rd.get('safeUrls', []))
+if 'http://onlyoffice-direct:8000/' not in safe_urls:
+    safe_urls.append('http://onlyoffice-direct:8000/')
+if rd.get('rejectUnauthorized') is not False or 'onlyoffice-direct:8000' not in str(rd.get('safeUrls', [])):
+    c['services']['CoAuthoring']['requestDefaults'] = dict(rd, rejectUnauthorized=False, safeUrls=safe_urls)
     with open(p,'w') as f: json.dump(c,f,indent=2)
-    print('  Updated local.json (rejectUnauthorized=false)')
+    print('  Updated local.json (rejectUnauthorized=false, safeUrls includes onlyoffice-direct)')
 else:
     print('  local.json already has rejectUnauthorized=false')
 " 2>/dev/null || true
