@@ -496,12 +496,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/session":
                 data = self.read_json()
-                info = data.get("info") or {}
-                direct_info = info.get("kinOnlyOffice") if isinstance(info, dict) else None
+                encoded = data.get("data_base64") or data.get("dataBase64")
+                reload_from_disk = bool(
+                    encoded
+                    or data.get("reloadFromDisk")
+                    or data.get("reload_from_disk")
+                )
                 session = None
-                if isinstance(direct_info, dict) and direct_info.get("sessionId"):
-                    data["sessionId"] = direct_info.get("sessionId")
-                    session = join_session(data)
+                if not reload_from_disk:
+                    info = data.get("info") or {}
+                    direct_info = info.get("kinOnlyOffice") if isinstance(info, dict) else None
+                    if isinstance(direct_info, dict) and direct_info.get("sessionId"):
+                        data["sessionId"] = direct_info.get("sessionId")
+                        session = join_session(data)
                 if not session:
                     session = create_session(data)
                 self.send_json(200, response_for_session(self, session))

@@ -84,6 +84,43 @@ function shellQuote(value) {
     return '"' + text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
+/** Upper bound for blank OOXML templates from direct-connector (with margin). */
+const OFFICE_SKELETON_MAX = { docx: 1200, xlsx: 1900, pptx: 7500 };
+const DIRECT_FLUSH_POLL_MS = 400;
+const DIRECT_FLUSH_MAX_POLLS = 8;
+/** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
+const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
+
+function isZipLocalHeader(bytes) {
+    return bytes && bytes.length >= 4 &&
+        bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+}
+
+function kinTempPartPath(kinPath) {
+    return String(kinPath || '').trim() + '.kinpart';
+}
+
+function validateOfficeBytes(bytes, fileType, options) {
+    const opts = options || {};
+    const ft = fileType || 'docx';
+    if (!bytes || !bytes.length) {
+        throw new Error('File is empty');
+    }
+    if (!isZipLocalHeader(bytes)) {
+        throw new Error('File is not a valid Office document (missing ZIP header)');
+    }
+    const skeletonMax = OFFICE_SKELETON_MAX[ft] || OFFICE_SKELETON_MAX.docx;
+    const existingSize = typeof opts.existingSize === 'number' ? opts.existingSize : null;
+    if (existingSize != null && existingSize > skeletonMax) {
+        if (bytes.length <= skeletonMax) {
+            throw new Error('Refusing to overwrite document with blank template');
+        }
+        if (bytes.length < Math.floor(existingSize * 0.9)) {
+            throw new Error('Refusing to overwrite document with much smaller file');
+        }
+    }
+}
+
 function ensureOnlyOfficeIframeShell() {
     const html = document.documentElement;
     const body = document.body;
@@ -152,6 +189,7 @@ export function bootstrapOnlyOfficeApp(config) {
     let directSyncing = false;
     let directSaveAsPromptOpen = false;
     let directLastPromptedVersion = 0;
+    let directLastPersistedVersion = 0;
 
     let bridgeHeartbeatInterval = null;
     let bridgeDead = false;
@@ -834,15 +872,130 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    async function writeKinBinaryFile(kinPath, bytes) {
-        log('writeKinBinaryFile: path=', kinPath, 'bytes=', bytes ? bytes.length : 0);
-        const response = await apiPostJson('/api/file/write', {
-            path: String(kinPath || ''),
-            data: Array.from(bytes)
+    async function apiKinCommand(command, fields) {
+        const params = new URLSearchParams();
+        const formFields = fields || {};
+        Object.keys(formFields).forEach(function(key) {
+            params.set(key, String(formFields[key] || ''));
         });
-        log('writeKinBinaryFile response:', response);
+        const response = await fetch('/api/commands/' + encodeURIComponent(command), {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: params.toString()
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || json.response !== 'success') {
+            throw new Error((json && json.message) ? String(json.message) : ('Command ' + command + ' failed'));
+        }
+        return json;
+    }
+
+    async function kinFileStatOnDisk(kinPath) {
+        try {
+            const bytes = await readKinFileBytes(kinPath);
+            return { exists: true, size: bytes.length };
+        } catch (_error) {
+            return { exists: false, size: 0 };
+        }
+    }
+
+    async function uploadKinFileBytes(kinPath, bytes) {
+        const path = String(kinPath || '');
+        const name = kinPathBaseName(path) || 'file.bin';
+        const size = bytes ? bytes.length : 0;
+        let uploadId = null;
+        try {
+            const beginResult = await apiPostJson('/api/file/upload_begin', { path, name, size });
+            if (!beginResult || beginResult.response !== 'success' || !beginResult.upload_id) {
+                throw new Error((beginResult && beginResult.message) ? String(beginResult.message) : 'Upload begin failed');
+            }
+            uploadId = beginResult.upload_id;
+            const chunkSize = Math.max(256 * 1024, Math.min(beginResult.chunk_size || (8 * 1024 * 1024), 16 * 1024 * 1024));
+            let offset = Number(beginResult.offset || 0);
+            while (offset < size) {
+                const end = Math.min(offset + chunkSize, size);
+                const chunk = bytes.subarray(offset, end);
+                const res = await fetch(
+                    '/api/file/upload_chunk?upload_id=' + encodeURIComponent(uploadId) +
+                    '&offset=' + encodeURIComponent(String(offset)),
+                    {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/octet-stream', Accept: 'application/json' },
+                        body: chunk
+                    }
+                );
+                const json = await res.json().catch(function() { return null; });
+                if (!res.ok || !json || json.response !== 'success') {
+                    throw new Error((json && json.message) ? String(json.message) : 'Chunk upload failed');
+                }
+                offset = Number(json.offset != null ? json.offset : end);
+            }
+            const finishResult = await apiPostJson('/api/file/upload_finish', { upload_id: uploadId });
+            uploadId = null;
+            return finishResult;
+        } catch (uploadError) {
+            if (uploadId) {
+                fetch('/api/file/upload_abort', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ upload_id: uploadId })
+                }).catch(function() {});
+            }
+            throw uploadError;
+        }
+    }
+
+    async function writeKinFileBytes(kinPath, bytes) {
+        const byteLen = bytes ? bytes.length : 0;
+        log('writeKinFileBytes: path=', kinPath, 'bytes=', byteLen);
+        let response;
+        if (byteLen >= KIN_WRITE_UPLOAD_THRESHOLD) {
+            response = await uploadKinFileBytes(kinPath, bytes);
+        } else {
+            response = await apiPostJson('/api/file/write', {
+                path: String(kinPath || ''),
+                data: bytesToBase64(bytes)
+            });
+        }
+        log('writeKinFileBytes response:', response);
         if (!response || response.response !== 'success') {
             throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
+        }
+    }
+
+    async function writeKinFileBytesSafe(targetKinPath, bytes, fileType) {
+        const ft = fileType || fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
+        const stat = await kinFileStatOnDisk(targetKinPath);
+        validateOfficeBytes(bytes, ft, { existingSize: stat.exists ? stat.size : null });
+
+        const tempPath = kinTempPartPath(targetKinPath);
+        await writeKinFileBytes(tempPath, bytes);
+
+        const readback = await readKinFileBytes(tempPath);
+        if (!readback || readback.length !== bytes.length) {
+            try {
+                await apiKinCommand('delete', { path: tempPath, mode: 'PERM' });
+            } catch (_error) {
+                // ignore cleanup failure
+            }
+            throw new Error('Save verification failed (temp readback length mismatch)');
+        }
+
+        try {
+            await apiKinCommand('move', { from: tempPath, to: targetKinPath });
+        } catch (moveError) {
+            try {
+                await apiKinCommand('delete', { path: tempPath, mode: 'PERM' });
+            } catch (_error) {
+                // ignore cleanup failure
+            }
+            throw moveError;
         }
     }
 
@@ -855,8 +1008,8 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         const bytes = await readNextcloudFileBytes(sourceNextcloudPath);
         log('readNextcloudFileBytes got', bytes ? bytes.length : 0, 'bytes');
-        await writeKinBinaryFile(targetKinPath, bytes);
-        log('writeKinBinaryFile completed');
+        await writeKinFileBytesSafe(targetKinPath, bytes, fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType));
+        log('writeKinFileBytesSafe completed');
         try {
             const verifyBytes = await readKinFileBytes(targetKinPath);
             if (verifyBytes && verifyBytes.length !== bytes.length) {
@@ -1051,37 +1204,52 @@ export function bootstrapOnlyOfficeApp(config) {
         return base64ToBytes(response.data_base64 || '');
     }
 
-    async function forceSaveDirectSession() {
+    async function ensureDirectSessionFlushed() {
         const id = directSessionId();
         if (!id) return;
-        const beforeVersion = Number(directSession && directSession.version ? directSession.version : 0);
+
+        const stateResponse = await refreshDirectState();
+        const state = stateResponse && stateResponse.state ? stateResponse.state : null;
+        if (!state) {
+            throw new Error('Save blocked: could not read editor session state');
+        }
+
+        const version = Number(state.version || 0);
+        const savePending = !!state.savePending;
+        if (version > directLastPersistedVersion && !savePending) {
+            return;
+        }
+
+        const beforeVersion = version;
         try {
             await directPostJson('/session/' + encodeURIComponent(id) + '/forcesave', {});
         } catch (error) {
-            log('Direct force-save failed; continuing with latest connector content:', error && error.message ? error.message : error);
+            log('Direct force-save request failed:', error && error.message ? error.message : error);
         }
-        for (let index = 0; index < 10; index += 1) {
-            await waitMs(700);
-            const stateResponse = await refreshDirectState();
-            const state = stateResponse && stateResponse.state ? stateResponse.state : null;
-            if (!state) continue;
-            if (Number(state.version || 0) > beforeVersion || state.savePending === false) {
+
+        for (let index = 0; index < DIRECT_FLUSH_MAX_POLLS; index += 1) {
+            await waitMs(DIRECT_FLUSH_POLL_MS);
+            const polled = await refreshDirectState();
+            const polledState = polled && polled.state ? polled.state : null;
+            if (!polledState) continue;
+            const nextVersion = Number(polledState.version || 0);
+            if (nextVersion > beforeVersion && polledState.savePending === false) {
                 return;
             }
         }
+        throw new Error('Save blocked: document not ready from editor');
     }
 
-    async function saveDirectSessionToKinPath(targetKinPath, options) {
-        const saveOptions = options || {};
+    async function saveDirectSessionToKinPath(targetKinPath) {
         if (!directSessionId()) {
             throw new Error('No direct ONLYOFFICE document is open');
         }
-        if (!saveOptions.skipForceSave) {
-            await forceSaveDirectSession();
-        }
+        await ensureDirectSessionFlushed();
         const bytes = await fetchDirectContent();
-        await writeKinBinaryFile(targetKinPath, bytes);
+        const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
+        await writeKinFileBytesSafe(targetKinPath, bytes, ft);
         currentKinPath = targetKinPath;
+        directLastPersistedVersion = Number(directSession && directSession.version ? directSession.version : directLastPersistedVersion);
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
@@ -1105,7 +1273,7 @@ export function bootstrapOnlyOfficeApp(config) {
                 return;
             }
             if (nextVersion > beforeVersion) {
-                await saveDirectSessionToKinPath(currentKinPath, { skipForceSave: true });
+                await saveDirectSessionToKinPath(currentKinPath);
                 log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
             } else if (directSession && directSession.info) {
                 writeKinOnlyOfficeInfo(currentKinPath, directSession.info).catch(function(err) {
@@ -1145,17 +1313,19 @@ export function bootstrapOnlyOfficeApp(config) {
 
     async function openDirectKinPath(kinPath) {
         const bytes = await readKinFileBytes(kinPath);
+        const ft = fileTypeFromName(kinPathBaseName(kinPath), appConfig.fileType);
+        validateOfficeBytes(bytes, ft, {});
         const filename = kinPathBaseName(kinPath) || appConfig.defaultFilename;
         const fileType = fileTypeFromName(filename, appConfig.fileType);
-        const info = await readKinOnlyOfficeInfo(kinPath);
         const session = await createDirectSession({
             filename,
             path: kinPath,
             file_type: fileType,
             data_base64: bytesToBase64(bytes),
-            info
+            reloadFromDisk: true
         });
         currentKinPath = kinPath;
+        directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         if (session.info) {
             writeKinOnlyOfficeInfo(kinPath, session.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (open) failed:', err && err.message ? err.message : err);
@@ -1169,9 +1339,11 @@ export function bootstrapOnlyOfficeApp(config) {
         const filename = appConfig.defaultFilename;
         const session = await createDirectSession({
             filename,
-            file_type: appConfig.fileType
+            file_type: appConfig.fileType,
+            reloadFromDisk: true
         });
         currentKinPath = null;
+        directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         await openDirectEditor(session);
     }
 
