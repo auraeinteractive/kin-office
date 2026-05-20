@@ -12,6 +12,7 @@ services:
       - DIRECT_DOCUMENT_BASE_URL=http://onlyoffice-direct:8000/direct
       - DOCUMENT_SERVER_PUBLIC_URL=${KIN_OFFICE_PREFIX:-/kin-office}/ds/
       - DOCUMENT_SERVER_INTERNAL_URL=http://onlyoffice/
+      # Optional override if auto-discovery fails: DOCUMENT_SERVER_BUILD_SEGMENT=9.3.1-xxxxxxxx
     ports:
       - "127.0.0.1:8000:8000"
     networks:

@@ -67,13 +67,21 @@
             });
         }
 
+        function resolveScriptUrl(src) {
+            var value = String(src || '').trim();
+            if (!value) return value;
+            if (value.indexOf('http://') === 0 || value.indexOf('https://') === 0) return value;
+            if (value.charAt(0) === '/') return (window.location.origin || '') + value;
+            return value;
+        }
+
         function loadScript(src) {
             return new Promise(function(resolve, reject) {
                 var script = document.createElement('script');
-                script.src = src;
+                script.src = resolveScriptUrl(src);
                 script.onload = resolve;
                 script.onerror = function() {
-                    reject(new Error('Could not load ONLYOFFICE API: ' + src));
+                    reject(new Error('Could not load ONLYOFFICE API: ' + resolveScriptUrl(src)));
                 };
                 document.head.appendChild(script);
             });
