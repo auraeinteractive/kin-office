@@ -60,10 +60,6 @@ function isZipLocalHeader(bytes) {
         bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
 }
 
-function kinTempPartPath(kinPath) {
-    return String(kinPath || '').trim() + '.kinpart';
-}
-
 function validateOfficeBytes(bytes, fileType, options) {
     const opts = options || {};
     const ft = fileType || 'docx';
@@ -433,28 +429,6 @@ export function bootstrapOnlyOfficeApp(config) {
         return new Promise((resolve) => setTimeout(resolve, duration));
     }
 
-    async function apiKinCommand(command, fields) {
-        const params = new URLSearchParams();
-        const formFields = fields || {};
-        Object.keys(formFields).forEach(function(key) {
-            params.set(key, String(formFields[key] || ''));
-        });
-        const response = await fetch('/api/commands/' + encodeURIComponent(command), {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                Accept: 'application/json'
-            },
-            body: params.toString()
-        });
-        const json = await response.json().catch(function() { return null; });
-        if (!response.ok || !json || json.response !== 'success') {
-            throw new Error((json && json.message) ? String(json.message) : ('Command ' + command + ' failed'));
-        }
-        return json;
-    }
-
     async function kinFileStatOnDisk(kinPath) {
         try {
             const bytes = await readKinFileBytes(kinPath);
@@ -519,9 +493,9 @@ export function bootstrapOnlyOfficeApp(config) {
         if (byteLen >= KIN_WRITE_UPLOAD_THRESHOLD) {
             response = await uploadKinFileBytes(kinPath, bytes);
         } else {
-            response = await apiPostJson('/api/file/write', {
+            response = await apiPostJson('/api/file/write_binary', {
                 path: String(kinPath || ''),
-                data: bytesToBase64(bytes)
+                data_base64: bytesToBase64(bytes)
             });
         }
         log('writeKinFileBytes response:', response);
@@ -534,29 +508,10 @@ export function bootstrapOnlyOfficeApp(config) {
         const ft = fileType || fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
         const stat = await kinFileStatOnDisk(targetKinPath);
         validateOfficeBytes(bytes, ft, { existingSize: stat.exists ? stat.size : null });
-
-        const tempPath = kinTempPartPath(targetKinPath);
-        await writeKinFileBytes(tempPath, bytes);
-
-        const readback = await readKinFileBytes(tempPath);
+        await writeKinFileBytes(targetKinPath, bytes);
+        const readback = await readKinFileBytes(targetKinPath);
         if (!readback || readback.length !== bytes.length) {
-            try {
-                await apiKinCommand('delete', { path: tempPath, mode: 'PERM' });
-            } catch (_error) {
-                // ignore cleanup failure
-            }
-            throw new Error('Save verification failed (temp readback length mismatch)');
-        }
-
-        try {
-            await apiKinCommand('move', { from: tempPath, to: targetKinPath });
-        } catch (moveError) {
-            try {
-                await apiKinCommand('delete', { path: tempPath, mode: 'PERM' });
-            } catch (_error) {
-                // ignore cleanup failure
-            }
-            throw moveError;
+            throw new Error('Save verification failed (readback length mismatch)');
         }
     }
 
