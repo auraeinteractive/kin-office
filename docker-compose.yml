@@ -1,24 +1,6 @@
 version: '3.8'
 
 services:
-  nextcloud:
-    image: nextcloud:latest
-    container_name: nextcloud
-    restart: unless-stopped
-    ports:
-      - "8081:80"
-    environment:
-      - NEXTCLOUD_ADMIN_USER=admin
-      - NEXTCLOUD_ADMIN_PASSWORD=K1nNextcloud2024!
-      - NEXTCLOUD_TRUSTED_DOMAINS=*
-      - SQLITE_DATABASE=nextcloud
-    volumes:
-      - nextcloud_data:/var/www/html/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - nextcloud_network
-
   onlyoffice:
     image: onlyoffice/documentserver:latest
     container_name: onlyoffice
@@ -30,32 +12,30 @@ services:
       - ALLOW_PRIVATE_IP_ADDRESS=true
       - ALLOW_META_IP_ADDRESS=true
     networks:
-      nextcloud_network:
+      kin_office_network:
         aliases:
           - onlyofficedocs
 
-  # Legacy nginx proxy removed - now using Kin's nginx on port 443
-  # nginx:
-  #   image: nginx:latest
-  #   container_name: nginx_nextcloud_proxy
-  #   restart: unless-stopped
-  #   ports:
-  #     - "5002:443"
-  #   volumes:
-  #     - ./nginx/conf.d:/etc/nginx/conf.d:ro
-  #     - ./nginx/certs:/etc/nginx/certs:ro
-  #     - ./nginx/kin-bridge.js:/etc/nginx/kin-bridge.js:ro
-  #   depends_on:
-  #     - nextcloud
-  #     - onlyoffice
-  #   networks:
-  #     nextcloud_network:
-  #       aliases:
-  #         - katana-arphicia
+  onlyoffice-direct:
+    build:
+      context: ./direct-connector
+    container_name: onlyoffice_direct_connector
+    restart: unless-stopped
+    environment:
+      - DIRECT_CONNECTOR_HOST=0.0.0.0
+      - DIRECT_CONNECTOR_PORT=8000
+      - DIRECT_DOCUMENT_BASE_URL=http://onlyoffice-direct:8000/direct
+      - DOCUMENT_SERVER_PUBLIC_URL=${KIN_OFFICE_PREFIX:-/kin-office}/ds/
+      - DOCUMENT_SERVER_INTERNAL_URL=http://onlyoffice/
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - onlyoffice
+    networks:
+      kin_office_network:
+        aliases:
+          - onlyoffice-direct
 
 networks:
-  nextcloud_network:
+  kin_office_network:
     driver: bridge
-
-volumes:
-  nextcloud_data:

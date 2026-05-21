@@ -44,15 +44,8 @@ mkdir -p "$MODULE_DIR"
 
 # Copy all needed files
 cp -a "$ROOT/docker-compose.yml" "$MODULE_DIR/"
-if [[ -f "$ROOT/docker-compose.direct.yml" ]]; then
-	cp -a "$ROOT/docker-compose.direct.yml" "$MODULE_DIR/"
-fi
 cp -a "$ROOT/deploy.sh" "$MODULE_DIR/"
 cp -a "$ROOT/build-apps.sh" "$MODULE_DIR/"
-if [[ -f "$ROOT/write-compose-host-overlay.sh" ]]; then
-	cp -a "$ROOT/write-compose-host-overlay.sh" "$MODULE_DIR/"
-	chmod 755 "$MODULE_DIR/write-compose-host-overlay.sh"
-fi
 chmod 755 "$MODULE_DIR/deploy.sh" "$MODULE_DIR/build-apps.sh"
 
 # Copy nginx/ directory
@@ -102,7 +95,6 @@ mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
-chmod 755 /opt/kin/modules/kin-office/write-compose-host-overlay.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/kin-office-wrapper.sh 2>/dev/null || true
 # Install Kin apps into the runtime repository used by deployed Kin.
 if [ -d /opt/kin/modules/kin-office/repository/Applications ]; then
@@ -117,7 +109,7 @@ fi
 if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     systemctl daemon-reload 2>/dev/null || true
     systemctl enable kin-office.service 2>/dev/null || true
-    # First install and upgrades: run the unit so kin-office-wrapper + deploy.sh apply nginx/Nextcloud/OIDC.
+    # First install and upgrades: run the unit so kin-office-wrapper + deploy.sh apply nginx + OnlyOffice Direct.
     # Do not fail apt if Docker is not ready yet (admin can: sudo systemctl start kin-office).
     set +e
     if systemctl is-active --quiet kin-office.service 2>/dev/null; then
@@ -162,13 +154,13 @@ Maintainer: Kin <packages@os-kin.com>
 Installed-Size: $SIZE
 Depends: docker.io (>= 20.10) | docker-ce (>= 20.10), kin (>= 2.0)
 Recommends: fonts-maven-pro, nginx
-Description: Kin Office Module - Nextcloud with OnlyOffice integration
- Nextcloud with OnlyOffice DocumentServer integration for Kin OS.
- Installs to /opt/kin/modules/kin-office/ and integrates with Kin's
- nginx reverse proxy for same-origin iframe embedding.
+Description: Kin Office Module - OnlyOffice Direct for Kin OS
+ OnlyOffice Document Server with direct Kin filesystem integration.
+ Installs to /opt/kin/modules/kin-office/ and integrates with Kin nginx
+ at /kin-office/ds/ and /kin-office/direct/.
  .
- Includes docker-compose setup, kin-bridge.js for postMessage API,
- and Kin workspace apps for OnlyOffice file editing.
+ Includes docker-compose (Document Server + direct connector) and Kin
+ workspace apps for editing docx/xlsx/pptx on Home: and other volumes.
 EOF
 
 mkdir -p "$ROOT/dist"

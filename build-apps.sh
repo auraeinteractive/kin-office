@@ -72,7 +72,7 @@ install_to_kin() {
 load_config
 
 echo ""
-echo "=== Kin Nextcloud Apps Build Script ==="
+echo "=== Kin OnlyOffice Apps Build Script ==="
 echo ""
 
 if [ -z "$KIN_BUILD_PATH" ]; then

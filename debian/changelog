@@ -1,3 +1,13 @@
+kin-office (1.1.0-1) stable; urgency=high
+
+  * BREAKING: Remove Nextcloud, OIDC, and kin-bridge; OnlyOffice Direct + Kin FS only.
+  * docker-compose: onlyoffice + onlyoffice-direct; merged compose file.
+  * deploy.sh: nginx /kin-office/ds/ and /direct/ only; drop occ/user_oidc.
+  * office_app.js: strip WebDAV/bridge; adaptive autosave polling.
+  * Remove kinnextcloud / kinnextcloud_mail apps; update specs and AGENTS.md.
+
+ -- Kin <packages@os-kin.com>  Thu, 21 May 2026 12:00:00 +0000
+
 kin-office (1.0.9-1) stable; urgency=high
 
   * direct-connector: rewrite loopback Document Server save URLs to internal

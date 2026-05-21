@@ -1,94 +1,31 @@
 #!/bin/bash
-# Wrapper script for kin-office service.
-# Handles docker compose with proper error handling and preserves Nextcloud config.
+# Wrapper script for kin-office service (OnlyOffice Document Server + direct connector).
 
 set -euo pipefail
 
 KIN_OFFICE_DIR="/opt/kin/modules/kin-office"
 COMPOSE_FILE="$KIN_OFFICE_DIR/docker-compose.yml"
-COMPOSE_DIRECT_FILE="$KIN_OFFICE_DIR/docker-compose.direct.yml"
-STATE_DIR="/var/lib/kin-office"
-NEXTCLOUD_CONFIG_BACKUP="$STATE_DIR/nextcloud-config"
 ACTION="${1:-start}"
 
 cd "$KIN_OFFICE_DIR" || { echo "ERROR: Cannot cd to $KIN_OFFICE_DIR"; exit 1; }
 
-# Read hostname from /etc/kin/config.ini for deploy mode
-KIN_CONFIG_FILE="/etc/kin/config.ini"
-if [[ -f "$KIN_CONFIG_FILE" ]]; then
-    KIN_OIDC_HOST=$(grep -E "^\s*hostname\s*=" "$KIN_CONFIG_FILE" 2>/dev/null | head -1 | sed 's/.*=\s*//' | tr -d ' ')
-    if [[ -n "$KIN_OIDC_HOST" ]]; then
-        echo "Using hostname from $KIN_CONFIG_FILE: $KIN_OIDC_HOST"
-        export KIN_OIDC_HOST
-    fi
-fi
 export KIN_OFFICE_PREFIX="${KIN_OFFICE_PREFIX:-/kin-office}"
 
-# Prefer docker compose v2 (plugin); fall back to standalone docker-compose (e.g. some EC2/Ubuntu images).
 if docker compose version >/dev/null 2>&1; then
     DOCKER_COMPOSE=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then
     DOCKER_COMPOSE=(docker-compose)
 else
     echo "ERROR: Neither 'docker compose' (v2 plugin) nor 'docker-compose' found." >&2
-    echo "Install one of: docker-compose-plugin (apt: docker-compose-plugin) or docker-compose (legacy)." >&2
     exit 1
 fi
 echo "Using: ${DOCKER_COMPOSE[*]}"
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
-if [[ -f "$COMPOSE_DIRECT_FILE" ]]; then
-    COMPOSE_ARGS+=(-f "$COMPOSE_DIRECT_FILE")
-fi
-# Same-host Kin + Nextcloud in Docker: resolve public hostname to host-gateway for OIDC discovery.
-OVERLAY_FILE="$KIN_OFFICE_DIR/docker-compose.kin-deploy-host.yml"
-if [[ -n "${KIN_OIDC_HOST:-}" ]] && [[ -f "$KIN_OFFICE_DIR/write-compose-host-overlay.sh" ]]; then
-    bash "$KIN_OFFICE_DIR/write-compose-host-overlay.sh" "$KIN_OFFICE_DIR" "$KIN_OIDC_HOST"
-fi
-if [[ -f "$OVERLAY_FILE" ]]; then
-    COMPOSE_ARGS+=(-f "$OVERLAY_FILE")
-fi
-
-backup_nextcloud_config() {
-    if ! docker container inspect nextcloud >/dev/null 2>&1; then
-        return 0
-    fi
-
-    mkdir -p "$NEXTCLOUD_CONFIG_BACKUP"
-    chmod 700 "$STATE_DIR" "$NEXTCLOUD_CONFIG_BACKUP"
-    if docker cp nextcloud:/var/www/html/config/. "$NEXTCLOUD_CONFIG_BACKUP/" 2>/dev/null &&
-       [[ -f "$NEXTCLOUD_CONFIG_BACKUP/config.php" ]]; then
-        chmod -R go-rwx "$STATE_DIR"
-        echo "Backed up Nextcloud config to $NEXTCLOUD_CONFIG_BACKUP"
-    fi
-}
-
-restore_nextcloud_config() {
-    if [[ ! -f "$NEXTCLOUD_CONFIG_BACKUP/config.php" ]]; then
-        return 0
-    fi
-    if ! docker container inspect nextcloud >/dev/null 2>&1; then
-        return 0
-    fi
-    if docker exec nextcloud test -f /var/www/html/config/config.php >/dev/null 2>&1; then
-        return 0
-    fi
-
-    echo "Restoring Nextcloud config from $NEXTCLOUD_CONFIG_BACKUP"
-    docker exec nextcloud mkdir -p /var/www/html/config >/dev/null 2>&1 || true
-    docker cp "$NEXTCLOUD_CONFIG_BACKUP/." nextcloud:/var/www/html/config/
-    docker exec nextcloud chown -R www-data:www-data /var/www/html/config >/dev/null 2>&1 || true
-}
 
 start_containers() {
-    local services=(nextcloud onlyoffice)
-    if [[ -f "$COMPOSE_DIRECT_FILE" ]]; then
-        services+=(onlyoffice-direct)
-    fi
+    local services=(onlyoffice onlyoffice-direct)
 
     echo "Starting kin-office containers (first start may pull large images; see journalctl -u kin-office -f)..."
-    # --build: after apt upgrade, onlyoffice-direct must pick up /opt/kin/modules/kin-office/direct-connector.
-    # Hub images (nextcloud, onlyoffice) are unchanged by --build when they have no build: section.
-    # --wait is Compose v2 only; legacy docker-compose v1 will error on it.
     if [[ "${DOCKER_COMPOSE[0]}" == "docker" && "${DOCKER_COMPOSE[1]}" == "compose" ]]; then
         "${DOCKER_COMPOSE[@]}" "${COMPOSE_ARGS[@]}" up -d --build --wait --timeout 180 "${services[@]}"
     else
@@ -111,11 +48,8 @@ case "$ACTION" in
         ;;
 esac
 
-backup_nextcloud_config
 start_containers
-restore_nextcloud_config
 
-# deploy.sh --deploy-mode applies runtime config after containers are running.
 if [[ -f "deploy.sh" ]]; then
     echo "Running deploy.sh --deploy-mode..."
     export KIN_OFFICE_SKIP_COMPOSE_UP=1

@@ -1,9 +1,0 @@
-{
-  "id": "kinnextcloud_mail",
-  "displayName": "Nextcloud Mail",
-  "version": "2",
-  "entry": "main.js",
-  "category": "Office",
-  "published": true
-}
-
