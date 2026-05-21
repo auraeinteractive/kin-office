@@ -8,7 +8,7 @@ kin-office provides **OnlyOffice Document Server** and a **direct connector** fo
 |-------|------|
 | `onlyoffice` (Docker) | Document Server at host `:5003`, proxied as `/kin-office/ds/` |
 | `onlyoffice-direct` (Docker) | Python connector: sessions, download/callback URLs for DS |
-| `kinonlyoffice_*` apps | Kin launchers; open/save via `/api/file/*` and `/kin-office/direct/` |
+| `kinonlyoffice_*` apps | Kin launchers; editor via `/kin-office/direct/`; disk via `write_binary` / upload |
 
 ## Docs
 

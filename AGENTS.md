@@ -59,7 +59,22 @@ Each app uses `manifest.json` → `main.js` → `kin.classes.Window` + `app.js` 
 | `POST /direct/callback/{id}` | Document Server save callback |
 | `GET /direct/download/{id}/…` | Document bytes for DS |
 
-Kin apps persist to Kin after callback via `syncDirectAutosaveToKin` in `office_app.js`.
+Kin apps persist to Kin after callback via `syncDirectAutosaveToKin` / `saveDirectSessionToKinPath` in `office_app.js`.
+
+## Kin file I/O (save path)
+
+OnlyOffice **saved** in the UI is not the same as written to `Home:`. Persistence is two hops: DS → connector callback (in-memory `version++`), then the Kin app writes disk.
+
+| Size | API | Payload |
+|------|-----|---------|
+| &lt; 16 KiB | `POST /api/file/write_binary` | `{ "path": "Home:…/file.docx", "data_base64": "…" }` |
+| ≥ 16 KiB | `upload_begin` / `upload_chunk` / `upload_finish` | Raw bytes per chunk |
+
+- **Open:** `GET /file/{volume}/…` (binary route from Kin path).
+- **Sidecar:** `POST /api/file/write` with text body for `Home:file.docx.info` (session rejoin metadata).
+- **Guards:** `validateOfficeBytes` (ZIP header, anti–blank-template); readback length check after write.
+
+If saves appear lost: check connector callbacks (`journalctl -u kin-office | grep direct-connector`), confirm File → Save As set a `Home:` path, and see [specs/architecture.md](specs/architecture.md).
 
 ## Commands
 
