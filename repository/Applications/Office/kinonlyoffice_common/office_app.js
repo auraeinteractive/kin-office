@@ -834,7 +834,6 @@ export function bootstrapOnlyOfficeApp(config) {
         if (!url) {
             throw new Error('Direct connector did not return an editor URL');
         }
-        launchedTarget = true;
         iframeEl.src = url;
         startDirectStatePolling();
     }
