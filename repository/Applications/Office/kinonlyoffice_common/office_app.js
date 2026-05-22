@@ -54,6 +54,7 @@ const DIRECT_POLL_PENDING_MS = 500;
 const DIRECT_REFRESH_DEBOUNCE_MS = 300;
 /** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
+const SAVE_CLOSE_TITLE_SUFFIX = ' — Waiting for save before closing';
 
 function isZipLocalHeader(bytes) {
     return bytes && bytes.length >= 4 &&
@@ -108,7 +109,8 @@ export function bootstrapOnlyOfficeApp(config) {
         appTag: 'kinonlyoffice',
         menuPrefix: 'onlyoffice.app',
         defaultFilename: 'Document.docx',
-        fileType: 'docx'
+        fileType: 'docx',
+        windowTitle: 'OnlyOffice'
     }, config || {});
 
     const iframeEl = ensureOnlyOfficeIframeShell();
@@ -139,8 +141,14 @@ export function bootstrapOnlyOfficeApp(config) {
     let directLastPromptedVersion = 0;
     let directLastPersistedVersion = 0;
     let directRefreshDebounceTimer = null;
+    let saveCloseHold = 0;
+    let saveCloseGateWarned = false;
 
     const instanceId = getInstanceId();
+    const baseWindowTitle = String(appConfig.windowTitle || 'OnlyOffice');
+    const kinWindow = (typeof kin !== 'undefined' && kin.classes && kin.classes.Window && instanceId)
+        ? new kin.classes.Window({ instanceId: instanceId })
+        : null;
 
     function log() {
         const args = ['[' + appConfig.appTag + ']'].concat(Array.prototype.slice.call(arguments));
@@ -153,6 +161,43 @@ export function bootstrapOnlyOfficeApp(config) {
         } catch (_error) {
             // ignore
         }
+    }
+
+    function isSaveInProgress() {
+        return saveCloseHold > 0 ||
+            directSyncing ||
+            directSessionSavePending() ||
+            directSaveAsPromptOpen;
+    }
+
+    function updateSaveCloseGate() {
+        if (!kinWindow) {
+            if (!saveCloseGateWarned) {
+                saveCloseGateWarned = true;
+                log('Save close gate unavailable (kin.classes.Window or instance id missing)');
+            }
+            return Promise.resolve();
+        }
+        const busy = isSaveInProgress();
+        const title = busy ? baseWindowTitle + SAVE_CLOSE_TITLE_SUFFIX : baseWindowTitle;
+        return Promise.all([
+            kinWindow.setCloseBlocked(busy),
+            kinWindow.setTitle(title)
+        ]).catch(function(err) {
+            log('updateSaveCloseGate failed:', err && err.message ? err.message : err);
+        });
+    }
+
+    function beginSaveCloseHold() {
+        saveCloseHold += 1;
+        void updateSaveCloseGate();
+    }
+
+    function endSaveCloseHold() {
+        if (saveCloseHold > 0) {
+            saveCloseHold -= 1;
+        }
+        void updateSaveCloseGate();
     }
 
     function ensureBusyOverlay() {
@@ -198,11 +243,18 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function withBusy(message, operation) {
+        const isSaveBusy = /sav/i.test(String(message || ''));
+        if (isSaveBusy) {
+            beginSaveCloseHold();
+        }
         showBusy(message);
         try {
             return await operation();
         } finally {
             hideBusy();
+            if (isSaveBusy) {
+                endSaveCloseHold();
+            }
         }
     }
 
@@ -582,6 +634,7 @@ export function bootstrapOnlyOfficeApp(config) {
             directSession.version = response.state.version;
             directSession.info = response.info || directSession.info;
         }
+        void updateSaveCloseGate();
         return response;
     }
 
@@ -659,6 +712,7 @@ export function bootstrapOnlyOfficeApp(config) {
     async function syncDirectAutosaveToKin() {
         if (directSyncing || !directSessionId()) return;
         directSyncing = true;
+        void updateSaveCloseGate();
         try {
             const beforeVersion = directSessionVersion();
             const stateResponse = await refreshDirectState();
@@ -682,10 +736,20 @@ export function bootstrapOnlyOfficeApp(config) {
             log('Direct autosave sync failed:', error && error.message ? error.message : error);
         } finally {
             directSyncing = false;
+            void updateSaveCloseGate();
         }
     }
 
     async function syncAfterEditorReportedSaved() {
+        beginSaveCloseHold();
+        try {
+            await syncAfterEditorReportedSavedInner();
+        } finally {
+            endSaveCloseHold();
+        }
+    }
+
+    async function syncAfterEditorReportedSavedInner() {
         const persistedBefore = directLastPersistedVersion;
 
         async function trySyncFromConnector() {
@@ -846,6 +910,7 @@ export function bootstrapOnlyOfficeApp(config) {
         const version = directSessionVersion();
         if (version && directLastPromptedVersion === version) return;
         directSaveAsPromptOpen = true;
+        void updateSaveCloseGate();
         directLastPromptedVersion = version;
         try {
             log('Prompting Save As for direct unsaved document:', reason || 'save');
@@ -856,6 +921,7 @@ export function bootstrapOnlyOfficeApp(config) {
             }
         } finally {
             directSaveAsPromptOpen = false;
+            void updateSaveCloseGate();
         }
     }
 
@@ -919,6 +985,7 @@ export function bootstrapOnlyOfficeApp(config) {
             if (data.changed === true) {
                 scheduleDirectRefreshDebounce();
                 updateDirectPollInterval();
+                void updateSaveCloseGate();
             } else if (data.changed === false) {
                 syncAfterEditorReportedSaved().catch(function(error) {
                     log('Post-save Kin sync failed:', error && error.message ? error.message : error);
@@ -951,8 +1018,13 @@ export function bootstrapOnlyOfficeApp(config) {
 
 
     window.addEventListener('message', (event) => {
+        if (event.origin !== ORIGIN) return;
         const data = event.data;
         if (!data) return;
+        if (data.kinRepositoryCloseRequested === true) {
+            log('Close requested while save in progress; will close after save completes');
+            return;
+        }
         if (data.kinMenuCommand === true) {
             handleMenuCommand(data.command);
             return;

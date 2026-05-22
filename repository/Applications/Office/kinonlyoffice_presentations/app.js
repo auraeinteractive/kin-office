@@ -5,5 +5,6 @@ bootstrapOnlyOfficeApp({
     targetPath: '/index.php/apps/onlyoffice/new?name=New%20presentation.pptx&dir=%2F',
     menuPrefix: 'onlyoffice.presentations',
     defaultFilename: 'Presentation.pptx',
-    fileType: 'pptx'
+    fileType: 'pptx',
+    windowTitle: 'OnlyOffice Presentations'
 });

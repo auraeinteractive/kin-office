@@ -5,5 +5,6 @@ bootstrapOnlyOfficeApp({
     targetPath: '/index.php/apps/onlyoffice/new?name=New%20document.docx&dir=%2F',
     menuPrefix: 'onlyoffice.documents',
     defaultFilename: 'Document.docx',
-    fileType: 'docx'
+    fileType: 'docx',
+    windowTitle: 'OnlyOffice Documents'
 });
