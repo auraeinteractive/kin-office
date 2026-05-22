@@ -143,6 +143,9 @@ export function bootstrapOnlyOfficeApp(config) {
     let directRefreshDebounceTimer = null;
     let saveCloseHold = 0;
     let saveCloseGateWarned = false;
+    let userRequestedClose = false;
+    let saveDrainActive = false;
+    let saveDrainPromise = null;
 
     const instanceId = getInstanceId();
     const baseWindowTitle = String(appConfig.windowTitle || 'OnlyOffice');
@@ -163,11 +166,36 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    function isSaveInProgress() {
-        return saveCloseHold > 0 ||
-            directSyncing ||
-            directSessionSavePending() ||
-            directSaveAsPromptOpen;
+    function isKinWriteActive() {
+        return saveCloseHold > 0 || directSyncing || directSaveAsPromptOpen;
+    }
+
+    function isKinSaveActive() {
+        return isKinWriteActive() || saveDrainActive;
+    }
+
+    function hasUnpersistedKinChanges() {
+        if (!directSessionId()) {
+            return false;
+        }
+        return directSessionVersion() > directLastPersistedVersion;
+    }
+
+    function shouldBlockClose() {
+        if (isKinSaveActive()) {
+            return true;
+        }
+        if (hasUnpersistedKinChanges()) {
+            return true;
+        }
+        if (userRequestedClose && directSessionSavePending()) {
+            return true;
+        }
+        return false;
+    }
+
+    function shouldShowCloseWaitingTitle() {
+        return userRequestedClose && shouldBlockClose();
     }
 
     function updateSaveCloseGate() {
@@ -178,14 +206,84 @@ export function bootstrapOnlyOfficeApp(config) {
             }
             return Promise.resolve();
         }
-        const busy = isSaveInProgress();
-        const title = busy ? baseWindowTitle + SAVE_CLOSE_TITLE_SUFFIX : baseWindowTitle;
-        return Promise.all([
-            kinWindow.setCloseBlocked(busy),
-            kinWindow.setTitle(title)
-        ]).catch(function(err) {
+        const block = shouldBlockClose();
+        const title = shouldShowCloseWaitingTitle()
+            ? baseWindowTitle + SAVE_CLOSE_TITLE_SUFFIX
+            : baseWindowTitle;
+        return kinWindow.setCloseBlocked(block).then(function() {
+            return kinWindow.setTitle(title);
+        }).then(function() {
+            if (!block) {
+                userRequestedClose = false;
+            }
+        }).catch(function(err) {
             log('updateSaveCloseGate failed:', err && err.message ? err.message : err);
         });
+    }
+
+    async function drainSaveBeforeClose() {
+        if (saveDrainPromise) {
+            return saveDrainPromise;
+        }
+        saveDrainActive = true;
+        saveDrainPromise = (async function() {
+            try {
+                for (let index = 0; index < DIRECT_FLUSH_MAX_POLLS; index += 1) {
+                    if (!userRequestedClose) {
+                        return;
+                    }
+                    await refreshDirectState();
+                    if (!shouldBlockClose()) {
+                        return;
+                    }
+                    if (directSessionSavePending() && hasUnpersistedKinChanges()) {
+                        await waitMs(DIRECT_FLUSH_POLL_MS);
+                        continue;
+                    }
+                    if (hasUnpersistedKinChanges() && !currentKinPath) {
+                        try {
+                            await promptDirectSaveAsForNewDocument('close');
+                        } catch (error) {
+                            if (error && error.message === 'cancel') {
+                                userRequestedClose = false;
+                            }
+                            throw error;
+                        }
+                        await refreshDirectState();
+                        return;
+                    }
+                    if (hasUnpersistedKinChanges() && currentKinPath && !directSyncing && !directSessionSavePending()) {
+                        await syncDirectAutosaveToKin();
+                        await refreshDirectState();
+                        continue;
+                    }
+                    if (isKinWriteActive()) {
+                        await waitMs(DIRECT_FLUSH_POLL_MS);
+                        continue;
+                    }
+                    await waitMs(DIRECT_FLUSH_POLL_MS);
+                }
+                if (userRequestedClose && shouldBlockClose()) {
+                    log('Close drain timed out with unsaved changes still pending');
+                }
+            } catch (error) {
+                if (error && error.message === 'cancel') {
+                    userRequestedClose = false;
+                }
+                log('drainSaveBeforeClose failed:', error && error.message ? error.message : error);
+            } finally {
+                saveDrainActive = false;
+                saveDrainPromise = null;
+                void updateSaveCloseGate();
+            }
+        })();
+        return saveDrainPromise;
+    }
+
+    function onUserRequestedClose() {
+        userRequestedClose = true;
+        void updateSaveCloseGate();
+        void drainSaveBeforeClose();
     }
 
     function beginSaveCloseHold() {
@@ -707,6 +805,7 @@ export function bootstrapOnlyOfficeApp(config) {
             });
         }
         requestWorkspaceRefresh();
+        void updateSaveCloseGate();
     }
 
     async function syncDirectAutosaveToKin() {
@@ -985,7 +1084,6 @@ export function bootstrapOnlyOfficeApp(config) {
             if (data.changed === true) {
                 scheduleDirectRefreshDebounce();
                 updateDirectPollInterval();
-                void updateSaveCloseGate();
             } else if (data.changed === false) {
                 syncAfterEditorReportedSaved().catch(function(error) {
                     log('Post-save Kin sync failed:', error && error.message ? error.message : error);
@@ -1022,7 +1120,7 @@ export function bootstrapOnlyOfficeApp(config) {
         const data = event.data;
         if (!data) return;
         if (data.kinRepositoryCloseRequested === true) {
-            log('Close requested while save in progress; will close after save completes');
+            onUserRequestedClose();
             return;
         }
         if (data.kinMenuCommand === true) {
@@ -1040,12 +1138,16 @@ export function bootstrapOnlyOfficeApp(config) {
             await openDirectKinPath(kinOpenPath);
         }).catch(function(error) {
             openAlert('Could not open requested file:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+        }).finally(function() {
+            void updateSaveCloseGate();
         });
     } else {
         withBusy('Creating document...', async function() {
             await openDirectBlankDocument();
         }).catch(function(error) {
             openAlert('Could not create document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
+        }).finally(function() {
+            void updateSaveCloseGate();
         });
     }
 }
