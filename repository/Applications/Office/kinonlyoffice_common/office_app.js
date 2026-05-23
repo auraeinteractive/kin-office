@@ -416,13 +416,24 @@ export function bootstrapOnlyOfficeApp(config) {
                 resolve(String(data.path || ''));
             }
             window.addEventListener('message', onMsg);
-            postToParent({
+            const preferredExt = String(
+                dialogOptions.preferredExtension ||
+                (Array.isArray(dialogOptions.preferredExtensions) && dialogOptions.preferredExtensions[0]) ||
+                appConfig.preferredExtension ||
+                appConfig.fileType ||
+                ''
+            ).trim().replace(/^\./, '');
+            const msg = {
                 kinOpenFileDialog: true,
                 requestId: reqId,
                 mode: dialogOptions.mode === 'save' ? 'save' : 'load',
                 initialPath: dialogOptions.initialPath || dialogInitialPath,
                 defaultFilename: dialogOptions.defaultFilename || ''
-            });
+            };
+            if (preferredExt.length) {
+                msg.preferredExtension = preferredExt;
+            }
+            postToParent(msg);
         });
     }
 
