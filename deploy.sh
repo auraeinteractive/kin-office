@@ -198,7 +198,7 @@ location = ${prefix}/__kin_ds_service_worker_stub {
     internal;
     default_type application/javascript;
     add_header Cache-Control "no-cache";
-    return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){self.clients.claim()});self.addEventListener("fetch",function(e){e.respondWith(fetch(e.request))});';
+    return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){e.waitUntil(self.registration.unregister().then(function(){return self.clients.claim()}))});';
 }
 
 location ^~ ${prefix}/ds/ {
