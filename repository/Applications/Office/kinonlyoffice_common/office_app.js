@@ -900,30 +900,36 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function syncDirectAutosaveToKin() {
-        if (directSyncing || !directSessionId()) return;
+        if (directSyncing || !directSessionId()) {
+            return false;
+        }
         directSyncing = true;
         void updateSaveCloseGate();
         try {
-            const beforeVersion = directSessionVersion();
-            const stateResponse = await refreshDirectState();
+            await refreshDirectState();
             const nextVersion = directSessionVersion();
             const savePending = directSessionSavePending();
             if (!currentKinPath) {
-                if (nextVersion > beforeVersion && !savePending) {
+                if (nextVersion > directLastPersistedVersion && !savePending) {
                     await promptDirectSaveAsForNewDocument('connector-save');
                 }
-                return;
+                return false;
             }
-            if (nextVersion > beforeVersion && !savePending) {
+            if (nextVersion > directLastPersistedVersion && !savePending) {
+                const persistedBefore = directLastPersistedVersion;
                 await saveDirectSessionToKinPath(currentKinPath);
                 log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
-            } else if (directSession && directSession.info) {
+                return directLastPersistedVersion > persistedBefore;
+            }
+            if (directSession && directSession.info) {
                 writeKinOnlyOfficeInfo(currentKinPath, directSession.info).catch(function(err) {
                     log('writeKinOnlyOfficeInfo (autosave) failed:', err && err.message ? err.message : err);
                 });
             }
+            return false;
         } catch (error) {
             log('Direct autosave sync failed:', error && error.message ? error.message : error);
+            return false;
         } finally {
             directSyncing = false;
             void updateSaveCloseGate();
@@ -945,8 +951,7 @@ export function bootstrapOnlyOfficeApp(config) {
         async function trySyncFromConnector() {
             const version = directSessionVersion();
             if (version > persistedBefore && !directSessionSavePending()) {
-                await syncDirectAutosaveToKin();
-                return true;
+                return await syncDirectAutosaveToKin();
             }
             return false;
         }
