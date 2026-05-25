@@ -43,8 +43,10 @@ function requestId(prefix) {
     return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
 }
 
-/** Upper bound for blank OOXML templates from direct-connector (with margin). */
-const OFFICE_SKELETON_MAX = { docx: 1200, xlsx: 1900, pptx: 7500 };
+/** Upper bound for blank OOXML templates from direct-connector (with margin).
+ * Sized to fit OnlyOffice's own default new.* templates that ship with the
+ * Document Server image: new.docx ~6940 B, new.xlsx ~6352 B, new.pptx ~34699 B. */
+const OFFICE_SKELETON_MAX = { docx: 8192, xlsx: 8192, pptx: 40960 };
 const DIRECT_FLUSH_POLL_MS = 500;
 const DIRECT_FLUSH_MAX_POLLS = 20;
 const DIRECT_SAVE_SYNC_POLLS = 30;
