@@ -187,19 +187,27 @@ export function bootstrapOnlyOfficeApp(config) {
 
     function discardUnpersistedKinChanges() {
         directLastPersistedVersion = directSessionVersion();
-        void updateSaveCloseGate();
+    }
+
+    async function releaseCloseGate() {
+        await updateSaveCloseGate();
+        if (kinWindow && !shouldBlockClose()) {
+            await kinWindow.setCloseBlocked(false);
+        }
     }
 
     async function confirmCloseWithoutSaving() {
         const ok = await openConfirm(
-            'Could not save the document to Kin.\n\nClose without saving?',
+            'This document has not been saved to Kin.\n\nClose without saving?',
             'Unsaved changes',
             'Close without saving'
         );
         if (ok) {
             discardUnpersistedKinChanges();
+            await releaseCloseGate();
         } else {
             userRequestedClose = false;
+            await updateSaveCloseGate();
         }
     }
 
@@ -208,9 +216,6 @@ export function bootstrapOnlyOfficeApp(config) {
             return true;
         }
         if (hasUnpersistedKinChanges()) {
-            return true;
-        }
-        if (userRequestedClose && directSessionSavePending()) {
             return true;
         }
         return false;
@@ -256,6 +261,7 @@ export function bootstrapOnlyOfficeApp(config) {
                     }
                     await refreshDirectState();
                     if (!shouldBlockClose()) {
+                        await releaseCloseGate();
                         return;
                     }
                     if (directSessionSavePending() && hasUnpersistedKinChanges()) {
@@ -273,6 +279,7 @@ export function bootstrapOnlyOfficeApp(config) {
                         }
                         await refreshDirectState();
                         if (!hasUnpersistedKinChanges()) {
+                            await releaseCloseGate();
                             return;
                         }
                         await confirmCloseWithoutSaving();
@@ -287,6 +294,10 @@ export function bootstrapOnlyOfficeApp(config) {
                             return;
                         }
                         await refreshDirectState();
+                        if (!hasUnpersistedKinChanges()) {
+                            await releaseCloseGate();
+                            return;
+                        }
                         continue;
                     }
                     if (isKinWriteActive()) {
@@ -302,12 +313,16 @@ export function bootstrapOnlyOfficeApp(config) {
             } catch (error) {
                 if (error && error.message === 'cancel') {
                     userRequestedClose = false;
+                } else {
+                    log('drainSaveBeforeClose failed:', error && error.message ? error.message : error);
+                    if (userRequestedClose) {
+                        await confirmCloseWithoutSaving();
+                    }
                 }
-                log('drainSaveBeforeClose failed:', error && error.message ? error.message : error);
             } finally {
                 saveDrainActive = false;
                 saveDrainPromise = null;
-                void updateSaveCloseGate();
+                await releaseCloseGate();
             }
         })();
         return saveDrainPromise;
@@ -873,7 +888,8 @@ export function bootstrapOnlyOfficeApp(config) {
         const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
         await writeKinFileBytesSafe(targetKinPath, bytes, ft, saveOptions);
         currentKinPath = targetKinPath;
-        directLastPersistedVersion = Number(directSession && directSession.version ? directSession.version : directLastPersistedVersion);
+        await refreshDirectState();
+        directLastPersistedVersion = directSessionVersion();
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
