@@ -946,21 +946,30 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     async function syncAfterEditorReportedSavedInner() {
-        const persistedBefore = directLastPersistedVersion;
-
         async function trySyncFromConnector() {
-            const version = directSessionVersion();
-            if (version > persistedBefore && !directSessionSavePending()) {
-                return await syncDirectAutosaveToKin();
+            if (!hasUnpersistedKinChanges()) {
+                return true;
             }
-            return false;
+            if (directSessionSavePending()) {
+                return false;
+            }
+            return await syncDirectAutosaveToKin();
+        }
+
+        await refreshDirectState();
+        if (!hasUnpersistedKinChanges()) {
+            return;
+        }
+        if (await trySyncFromConnector()) {
+            return;
         }
 
         for (let index = 0; index < DIRECT_SAVE_SYNC_POLLS; index += 1) {
-            if (index > 0) {
-                await waitMs(DIRECT_SAVE_SYNC_POLL_MS);
-            }
+            await waitMs(DIRECT_SAVE_SYNC_POLL_MS);
             await refreshDirectState();
+            if (!hasUnpersistedKinChanges()) {
+                return;
+            }
             if (await trySyncFromConnector()) {
                 return;
             }
@@ -976,7 +985,7 @@ export function bootstrapOnlyOfficeApp(config) {
                 : '';
             const message = (error && error.message ? error.message : String(error)) + callbackHint;
             log('Editor reported saved but Kin could not confirm connector save:', message);
-            if (currentKinPath) {
+            if (currentKinPath && hasUnpersistedKinChanges()) {
                 await openAlert(
                     'ONLYOFFICE reported saved, but the file on Kin was not updated.\n\n' +
                     message +
@@ -988,12 +997,15 @@ export function bootstrapOnlyOfficeApp(config) {
         }
 
         await refreshDirectState();
+        if (!hasUnpersistedKinChanges()) {
+            return;
+        }
         if (await trySyncFromConnector()) {
             return;
         }
 
         log('Editor reported saved but connector session version did not advance (check onlyoffice-direct logs)');
-        if (currentKinPath) {
+        if (currentKinPath && hasUnpersistedKinChanges()) {
             await openAlert(
                 'ONLYOFFICE reported saved, but Kin did not receive the updated document.\n\n' +
                 'Use File → Save to retry.',
