@@ -43,10 +43,9 @@ function requestId(prefix) {
     return prefix + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
 }
 
-/** Upper bound for blank OOXML templates from direct-connector (with margin).
- * Sized to fit OnlyOffice's own default new.* templates that ship with the
- * Document Server image: new.docx ~6940 B, new.xlsx ~6352 B, new.pptx ~34699 B. */
-const OFFICE_SKELETON_MAX = { docx: 8192, xlsx: 8192, pptx: 40960 };
+/** Legacy hand-rolled OOXML stubs from early direct-connector (before DS templates).
+ * Only block writes this small from overwriting a real on-disk document. */
+const OFFICE_LEGACY_SKELETON_MAX = { docx: 1200, xlsx: 1900, pptx: 7500 };
 const DIRECT_FLUSH_POLL_MS = 500;
 const DIRECT_FLUSH_MAX_POLLS = 20;
 const DIRECT_SAVE_SYNC_POLLS = 30;
@@ -72,10 +71,13 @@ function validateOfficeBytes(bytes, fileType, options) {
     if (!isZipLocalHeader(bytes)) {
         throw new Error('File is not a valid Office document (missing ZIP header)');
     }
-    const skeletonMax = OFFICE_SKELETON_MAX[ft] || OFFICE_SKELETON_MAX.docx;
+    if (opts.allowOverwrite) {
+        return;
+    }
+    const legacyMax = OFFICE_LEGACY_SKELETON_MAX[ft] || OFFICE_LEGACY_SKELETON_MAX.docx;
     const existingSize = typeof opts.existingSize === 'number' ? opts.existingSize : null;
-    if (existingSize != null && existingSize > skeletonMax) {
-        if (bytes.length <= skeletonMax) {
+    if (existingSize != null && existingSize > legacyMax) {
+        if (bytes.length <= legacyMax) {
             throw new Error('Refusing to overwrite document with blank template');
         }
         if (bytes.length < Math.floor(existingSize * 0.9)) {
@@ -183,6 +185,24 @@ export function bootstrapOnlyOfficeApp(config) {
         return directSessionVersion() > directLastPersistedVersion;
     }
 
+    function discardUnpersistedKinChanges() {
+        directLastPersistedVersion = directSessionVersion();
+        void updateSaveCloseGate();
+    }
+
+    async function confirmCloseWithoutSaving() {
+        const ok = await openConfirm(
+            'Could not save the document to Kin.\n\nClose without saving?',
+            'Unsaved changes',
+            'Close without saving'
+        );
+        if (ok) {
+            discardUnpersistedKinChanges();
+        } else {
+            userRequestedClose = false;
+        }
+    }
+
     function shouldBlockClose() {
         if (isKinSaveActive()) {
             return true;
@@ -248,14 +268,24 @@ export function bootstrapOnlyOfficeApp(config) {
                         } catch (error) {
                             if (error && error.message === 'cancel') {
                                 userRequestedClose = false;
+                                return;
                             }
-                            throw error;
                         }
                         await refreshDirectState();
+                        if (!hasUnpersistedKinChanges()) {
+                            return;
+                        }
+                        await confirmCloseWithoutSaving();
                         return;
                     }
                     if (hasUnpersistedKinChanges() && currentKinPath && !directSyncing && !directSessionSavePending()) {
-                        await syncDirectAutosaveToKin();
+                        try {
+                            await saveDirectSessionToKinPath(currentKinPath);
+                        } catch (error) {
+                            log('Close drain save failed:', error && error.message ? error.message : error);
+                            await confirmCloseWithoutSaving();
+                            return;
+                        }
                         await refreshDirectState();
                         continue;
                     }
@@ -267,6 +297,7 @@ export function bootstrapOnlyOfficeApp(config) {
                 }
                 if (userRequestedClose && shouldBlockClose()) {
                     log('Close drain timed out with unsaved changes still pending');
+                    await confirmCloseWithoutSaving();
                 }
             } catch (error) {
                 if (error && error.message === 'cancel') {
@@ -436,6 +467,28 @@ export function bootstrapOnlyOfficeApp(config) {
                 msg.preferredExtension = preferredExt;
             }
             postToParent(msg);
+        });
+    }
+
+    function openConfirm(message, title, confirmLabel) {
+        return new Promise((resolve) => {
+            const reqId = requestId('confirm');
+            function onMsg(event) {
+                const data = event.data;
+                if (event.origin !== ORIGIN || !data || data.kinConfirmResult !== true || data.requestId !== reqId) {
+                    return;
+                }
+                window.removeEventListener('message', onMsg);
+                resolve(!!data.ok);
+            }
+            window.addEventListener('message', onMsg);
+            postToParent({
+                kinOpenConfirm: true,
+                requestId: reqId,
+                message: String(message || ''),
+                title: title || 'OnlyOffice',
+                confirmLabel: confirmLabel || 'OK'
+            });
         });
     }
 
@@ -667,10 +720,13 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    async function writeKinFileBytesSafe(targetKinPath, bytes, fileType) {
+    async function writeKinFileBytesSafe(targetKinPath, bytes, fileType, writeOptions) {
         const ft = fileType || fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
         const stat = await kinFileStatOnDisk(targetKinPath);
-        validateOfficeBytes(bytes, ft, { existingSize: stat.exists ? stat.size : null });
+        validateOfficeBytes(bytes, ft, {
+            existingSize: stat.exists ? stat.size : null,
+            allowOverwrite: !!(writeOptions && writeOptions.allowOverwrite)
+        });
         await writeKinFileBytes(targetKinPath, bytes);
         const readback = await readKinFileBytes(targetKinPath);
         if (!readback || readback.length !== bytes.length) {
@@ -808,14 +864,14 @@ export function bootstrapOnlyOfficeApp(config) {
         throw new Error('Save blocked: document not ready from editor');
     }
 
-    async function saveDirectSessionToKinPath(targetKinPath) {
+    async function saveDirectSessionToKinPath(targetKinPath, saveOptions) {
         if (!directSessionId()) {
             throw new Error('No direct ONLYOFFICE document is open');
         }
         await ensureDirectSessionFlushed();
         const bytes = await fetchDirectContent();
         const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
-        await writeKinFileBytesSafe(targetKinPath, bytes, ft);
+        await writeKinFileBytesSafe(targetKinPath, bytes, ft, saveOptions);
         currentKinPath = targetKinPath;
         directLastPersistedVersion = Number(directSession && directSession.version ? directSession.version : directLastPersistedVersion);
         if (directSession && directSession.info) {
@@ -1018,7 +1074,7 @@ export function bootstrapOnlyOfficeApp(config) {
             defaultFilename: defaultName || appConfig.defaultFilename
         });
         await withBusy('Saving to Kin path...', async function() {
-            await saveDirectSessionToKinPath(targetKinPath);
+            await saveDirectSessionToKinPath(targetKinPath, { allowOverwrite: true });
         });
         await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
     }
@@ -1034,8 +1090,15 @@ export function bootstrapOnlyOfficeApp(config) {
             log('Prompting Save As for direct unsaved document:', reason || 'save');
             await directSaveAs(appConfig.defaultFilename);
         } catch (error) {
-            if (!error || error.message !== 'cancel') {
-                await openAlert(error && error.message ? error.message : String(error), 'Save failed');
+            if (error && error.message === 'cancel') {
+                if (reason === 'close') {
+                    throw error;
+                }
+                return;
+            }
+            await openAlert(error && error.message ? error.message : String(error), 'Save failed');
+            if (reason === 'close') {
+                throw error;
             }
         } finally {
             directSaveAsPromptOpen = false;
