@@ -780,7 +780,13 @@ export function bootstrapOnlyOfficeApp(config) {
         const beforeVersion = version;
         try {
             const forceResult = await directPostJson('/session/' + encodeURIComponent(id) + '/forcesave', {});
-            if (!forceResult || forceResult.accepted !== true) {
+            const dsError = forceResult && forceResult.error != null ? Number(forceResult.error) : null;
+            if (forceResult && forceResult.accepted === true) {
+                // fall through to version-bump poll below
+            } else if (dsError === 4) {
+                log('Direct force-save: no pending changes (DS error 4); using current connector content.');
+                return;
+            } else {
                 log('Direct force-save was not accepted by Document Server', forceResult && forceResult.body ? forceResult.body : '');
             }
         } catch (error) {

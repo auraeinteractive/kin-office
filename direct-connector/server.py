@@ -565,11 +565,13 @@ class Handler(BaseHTTPRequestHandler):
                     parsed = None
                 if parsed and parsed.get("error") == 0:
                     session["save_pending"] = True
+                ds_error = parsed.get("error") if isinstance(parsed, dict) else None
                 self.send_json(200, {
                     "response": "success",
                     "status": status,
                     "body": text,
                     "accepted": bool(parsed and parsed.get("error") == 0),
+                    "error": ds_error,
                     "state": session_state(session),
                 })
                 return
