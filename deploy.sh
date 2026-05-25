@@ -194,16 +194,10 @@ location = ${prefix} {
     return 204;
 }
 
-location = ${prefix}/__kin_ds_service_worker_stub {
-    internal;
-    default_type application/javascript;
-    add_header Cache-Control "no-cache";
-    return 200 'self.addEventListener("install",function(e){self.skipWaiting()});self.addEventListener("activate",function(e){e.waitUntil(self.registration.unregister().then(function(){return self.clients.claim()}))});';
-}
-
 location ^~ ${prefix}/ds/ {
     if (\$uri ~ document_editor_service_worker\\.js) {
-        rewrite ^ ${prefix}/__kin_ds_service_worker_stub last;
+        add_header Cache-Control "no-cache" always;
+        return 404;
     }
     proxy_pass http://127.0.0.1:5003/;
 EOF
@@ -232,7 +226,7 @@ EOF
     proxy_set_header X-Forwarded-Prefix ${prefix}/ds;
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
-    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}});navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(s){s.unregister()})}).catch(function(){})</script></head>';
+    sub_filter '</head>' '<script>document.addEventListener("keydown",function(e){try{window.parent.postMessage({type:"kinEditorKeydown",key:e.key||"",ctrlKey:!!e.ctrlKey,metaKey:!!e.metaKey,shiftKey:!!e.shiftKey,altKey:!!e.altKey},"*")}catch(_e){}});try{if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return Promise.reject(new Error("kin-office: service worker disabled"))};navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(s){s.unregister()})}).catch(function(){})}}catch(_e){}</script></head>';
 }
 
 location ^~ ${prefix}/direct/ {
