@@ -57,11 +57,13 @@ const DIRECT_REFRESH_DEBOUNCE_MS = 300;
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
 const SAVE_CLOSE_LONG_DELAY_MS = 5000;
 const KIN_SYNC_FOOTER = {
+    idle: { label: '', tone: 'ok' },
     saved: { label: 'Saved to Kin', tone: 'ok' },
     dirty: { label: 'Unsaved - autosaving...', tone: 'pending' },
     saving: { label: 'Saving to Kin...', tone: 'pending' },
     error: { label: 'Save failed - File > Save to retry', tone: 'error' }
 };
+const KIN_SYNC_FOOTER_HIDE_MS = 2500;
 
 function isZipLocalHeader(bytes) {
     return bytes && bytes.length >= 4 &&
@@ -158,9 +160,9 @@ export function bootstrapOnlyOfficeApp(config) {
     let saveDrainPromise = null;
     let kinSyncState = 'saved';
     let kinSyncDetail = '';
+    let kinSyncFooterHideTimer = null;
     let closeGateStartedAt = 0;
     let closeGateLongRunning = false;
-    let blankDocumentUserEdited = false;
 
     const instanceId = getInstanceId();
     const baseWindowTitle = String(appConfig.windowTitle || 'OnlyOffice');
@@ -389,7 +391,7 @@ export function bootstrapOnlyOfficeApp(config) {
         style.textContent = [
             '@keyframes kinOnlyOfficeSpin { to { transform: rotate(360deg); } }',
             '#kinOnlyOfficeFooter {',
-            '    position: fixed; top: 4px; right: 32px; z-index: 99998;',
+            '    position: fixed; top: 2px; right: 24px; z-index: 99998;',
             '    display: flex; align-items: center; gap: 8px;',
             '    padding: 5px 10px; border-radius: 999px;',
             '    background: rgba(20,20,20,0.78); color: #fff;',
@@ -397,6 +399,7 @@ export function bootstrapOnlyOfficeApp(config) {
             '    box-shadow: 0 2px 8px rgba(0,0,0,0.35);',
             '    pointer-events: none;',
             '    transition: opacity 180ms ease;',
+            '    opacity: 1;',
             '}',
             '#kinOnlyOfficeFooter[data-tone="ok"] { background: rgba(28,76,40,0.85); }',
             '#kinOnlyOfficeFooter[data-tone="pending"] { background: rgba(76,60,16,0.88); }',
@@ -459,18 +462,44 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     function renderSyncFooter() {
+        if (kinSyncFooterHideTimer) {
+            clearTimeout(kinSyncFooterHideTimer);
+            kinSyncFooterHideTimer = null;
+        }
+        if (kinSyncState === 'idle') {
+            const existing = document.getElementById('kinOnlyOfficeFooter');
+            if (existing) {
+                existing.style.opacity = '0';
+                setTimeout(function() {
+                    if (kinSyncState === 'idle') existing.style.display = 'none';
+                }, 180);
+            }
+            return;
+        }
         const cfg = KIN_SYNC_FOOTER[kinSyncState] || KIN_SYNC_FOOTER.saved;
         const footer = ensureSyncFooter();
+        footer.style.display = 'flex';
+        footer.style.opacity = '1';
         footer.setAttribute('data-tone', cfg.tone);
         const label = footer.querySelector('.label');
         if (!label) return;
         let text = cfg.label;
-        if (kinSyncState === 'dirty' && !currentKinPath) {
-            text = 'Not saved to Kin - use File > Save As';
-        } else if (kinSyncState === 'error' && kinSyncDetail) {
+        if (kinSyncState === 'error' && kinSyncDetail) {
             text = 'Save failed: ' + kinSyncDetail;
         }
         label.textContent = text;
+        if (kinSyncState === 'saved') {
+            kinSyncFooterHideTimer = setTimeout(function() {
+                kinSyncFooterHideTimer = null;
+                if (kinSyncState !== 'saved') return;
+                footer.style.opacity = '0';
+                setTimeout(function() {
+                    if (kinSyncState === 'saved') {
+                        footer.style.display = 'none';
+                    }
+                }, 180);
+            }, KIN_SYNC_FOOTER_HIDE_MS);
+        }
     }
 
     function ensureCloseOverlay() {
@@ -578,9 +607,9 @@ export function bootstrapOnlyOfficeApp(config) {
     function recomputeKinSyncState() {
         if (kinSyncState === 'saving' || kinSyncState === 'error') return;
         if (hasUnpersistedKinChanges()) {
-            setKinSyncState('dirty', currentKinPath || '');
+            setKinSyncState(currentKinPath ? 'dirty' : 'idle', currentKinPath || '');
         } else if (directSessionId()) {
-            setKinSyncState('saved', currentKinPath || '');
+            setKinSyncState(currentKinPath ? 'saved' : 'idle', currentKinPath || '');
         }
     }
 
@@ -1173,7 +1202,7 @@ export function bootstrapOnlyOfficeApp(config) {
             const savePending = directSessionSavePending();
             if (!currentKinPath) {
                 if (nextVersion > directLastPersistedVersion && !savePending) {
-                    setKinSyncState('dirty', '');
+                    setKinSyncState('idle', '');
                 }
                 return false;
             }
@@ -1298,7 +1327,6 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = kinPath;
-        blankDocumentUserEdited = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         if (session.info) {
             writeKinOnlyOfficeInfo(kinPath, session.info).catch(function(err) {
@@ -1318,12 +1346,10 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = null;
-        blankDocumentUserEdited = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         await openDirectEditor(session);
-        // Fresh blank document: nothing to save yet. The footer stays "Saved"
-        // until the user actually edits (documentStateChange(true) flips it).
-        setKinSyncState('saved', '');
+        // Fresh blank document: no path, no filename on disk, nothing to report.
+        setKinSyncState('idle', '');
     }
 
     async function directSaveAs(defaultName) {
@@ -1335,7 +1361,6 @@ export function bootstrapOnlyOfficeApp(config) {
         await withBusy('Saving to Kin path...', async function() {
             await saveDirectSessionToKinPath(targetKinPath, { allowOverwrite: true });
         });
-        await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
     }
 
     async function promptDirectSaveAsForNewDocument(reason) {
@@ -1423,9 +1448,10 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'documentStateChange') {
             if (data.changed === true) {
-                if (!currentKinPath && !blankDocumentUserEdited) {
+                if (!currentKinPath) {
                     // ONLYOFFICE can report an initial dirty state for a fresh
-                    // template before the user has typed. Do not nag on open.
+                    // template before the user has typed. It also has no Kin
+                    // path yet, so there is no useful save-state bubble to show.
                 } else if (kinSyncState !== 'saving' && kinSyncState !== 'error') {
                     setKinSyncState('dirty', currentKinPath || '');
                 }
@@ -1440,12 +1466,6 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'editorKeydown') {
             const key = String(data.key || '').toLowerCase();
-            if (key && key.length === 1 && !data.ctrlKey && !data.metaKey && !data.altKey) {
-                blankDocumentUserEdited = true;
-                if (!currentKinPath && kinSyncState !== 'saving' && kinSyncState !== 'error') {
-                    setKinSyncState('dirty', '');
-                }
-            }
             if ((data.ctrlKey || data.metaKey) && key === 's' && !currentKinPath) {
                 await promptDirectSaveAsForNewDocument('keyboard-save');
             }
