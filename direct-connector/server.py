@@ -114,6 +114,7 @@ def session_public_urls(handler, session):
 
 def make_config(handler, session):
     urls = session_public_urls(handler, session)
+    has_kin_path = bool(str(session.get("file_path") or "").strip())
     return {
         "document": {
             "fileType": session["file_type"],
@@ -137,7 +138,7 @@ def make_config(handler, session):
                 "name": session.get("user_name") or "Kin User",
             },
             "customization": {
-                "autosave": True,
+                "autosave": has_kin_path,
                 "forcesave": True,
             },
         },
@@ -449,6 +450,49 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(404, {"response": "fail", "message": "Session not found or stale."})
                     return
                 self.send_json(200, response_for_session(self, session))
+                return
+            match = re.match(r"^/api/session/([^/]+)/document-meta$", path)
+            if match:
+                session = SESSIONS.get(match.group(1))
+                if not session:
+                    self.send_json(404, {"response": "fail", "message": "Session not found."})
+                    return
+                data = self.read_json()
+                title = str(data.get("title") or data.get("filename") or "").strip()
+                kin_path = str(data.get("path") or data.get("filePath") or "").strip()
+                if kin_path:
+                    session["file_path"] = kin_path
+                if title:
+                    session["filename"] = clean_filename(title, session["file_type"])
+                elif kin_path:
+                    session["filename"] = clean_filename(
+                        kin_path.rsplit("/", 1)[-1], session["file_type"]
+                    )
+                session["last_seen"] = now()
+                meta_error = None
+                meta_title = session["filename"]
+                try:
+                    status, text = post_command({
+                        "c": "meta",
+                        "key": session["document_key"],
+                        "meta": {"title": meta_title},
+                    })
+                    parsed = None
+                    try:
+                        parsed = json.loads(text)
+                    except Exception:
+                        parsed = None
+                    if not (isinstance(parsed, dict) and parsed.get("error") == 0):
+                        meta_error = parsed.get("error") if isinstance(parsed, dict) else text
+                except Exception as error:
+                    meta_error = str(error)
+                self.send_json(200, {
+                    "response": "success",
+                    "filename": session["filename"],
+                    "metaError": meta_error,
+                    "state": session_state(session),
+                    "info": info_payload(session),
+                })
                 return
             match = re.match(r"^/api/session/([^/]+)/forcesave$", path)
             if match:

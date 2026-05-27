@@ -142,7 +142,8 @@ export function bootstrapOnlyOfficeApp(config) {
     let directStatePollingInterval = null;
     let directSyncing = false;
     let directSaveAsPromptOpen = false;
-    let directLastPromptedVersion = 0;
+    let kinSaveFlowActive = false;
+    let handleEditorSavedPromise = null;
     let directLastPersistedVersion = 0;
     let directAutosaveTimer = null;
     let directEditorDirty = false;
@@ -173,7 +174,11 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     function isKinWriteActive() {
-        return saveCloseHold > 0 || directSyncing || directSaveAsPromptOpen;
+        return saveCloseHold > 0 || directSyncing || directSaveAsPromptOpen || kinSaveFlowActive;
+    }
+
+    function needsKinSaveLocation() {
+        return !!directSessionId() && !currentKinPath;
     }
 
     function isKinSaveActive() {
@@ -836,7 +841,8 @@ export function bootstrapOnlyOfficeApp(config) {
         return base64ToBytes(response.data_base64 || '');
     }
 
-    async function ensureDirectSessionFlushed() {
+    async function ensureDirectSessionFlushed(options) {
+        const opts = options || {};
         const id = directSessionId();
         if (!id) return;
 
@@ -848,7 +854,7 @@ export function bootstrapOnlyOfficeApp(config) {
 
         const version = Number(state.version || 0);
         const savePending = !!state.savePending;
-        if (version > directLastPersistedVersion && !savePending) {
+        if (!opts.requireFreshSave && version > directLastPersistedVersion && !savePending) {
             return;
         }
 
@@ -859,6 +865,9 @@ export function bootstrapOnlyOfficeApp(config) {
             if (forceResult && forceResult.accepted === true) {
                 // fall through to version-bump poll below
             } else if (dsError === 4) {
+                if (opts.requireFreshSave) {
+                    throw new Error('Save blocked: editor changes were not flushed by Document Server');
+                }
                 log('Direct force-save: no pending changes (DS error 4); using current connector content.');
                 return;
             } else {
@@ -886,7 +895,7 @@ export function bootstrapOnlyOfficeApp(config) {
             throw new Error('No direct ONLYOFFICE document is open');
         }
         const saveDirtyRevision = directEditorDirtyRevision;
-        await ensureDirectSessionFlushed();
+        await ensureDirectSessionFlushed({ requireFreshSave: directEditorDirty });
         const bytes = await fetchDirectContent();
         const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
         await writeKinFileBytesSafe(targetKinPath, bytes, ft, saveOptions);
@@ -896,6 +905,7 @@ export function bootstrapOnlyOfficeApp(config) {
         if (directEditorDirtyRevision === saveDirtyRevision) {
             directEditorDirty = false;
         }
+        await updateDirectDocumentMeta(targetKinPath);
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
@@ -903,6 +913,33 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         requestWorkspaceRefresh();
         void updateSaveCloseGate();
+    }
+
+    async function updateDirectDocumentMeta(targetKinPath) {
+        const id = directSessionId();
+        if (!id || !targetKinPath) {
+            return;
+        }
+        const title = kinPathBaseName(targetKinPath);
+        try {
+            const response = await directPostJson(
+                '/session/' + encodeURIComponent(id) + '/document-meta',
+                { title: title, path: targetKinPath }
+            );
+            if (response && response.metaError != null) {
+                log('Direct document-meta failed:', response.metaError);
+            }
+            if (response && response.filename && directSession) {
+                directSession.filename = response.filename;
+            }
+            if (kinWindow && title) {
+                kinWindow.setTitle(baseWindowTitle + ' — ' + title).catch(function(err) {
+                    log('setTitle after save failed:', err && err.message ? err.message : err);
+                });
+            }
+        } catch (error) {
+            log('Direct document-meta request failed:', error && error.message ? error.message : error);
+        }
     }
 
     async function syncDirectAutosaveToKin() {
@@ -916,9 +953,6 @@ export function bootstrapOnlyOfficeApp(config) {
             const nextVersion = directSessionVersion();
             const savePending = directSessionSavePending();
             if (!currentKinPath) {
-                if (nextVersion > directLastPersistedVersion && !savePending) {
-                    await promptDirectSaveAsForNewDocument('connector-save');
-                }
                 return false;
             }
             if (nextVersion > directLastPersistedVersion && !savePending) {
@@ -964,7 +998,7 @@ export function bootstrapOnlyOfficeApp(config) {
         }
 
         if (!currentKinPath) {
-            return await syncDirectAutosaveToKin();
+            return false;
         }
 
         if (!directEditorDirty) {
@@ -1142,29 +1176,32 @@ export function bootstrapOnlyOfficeApp(config) {
         await openDirectEditor(session);
     }
 
-    async function directSaveAs(defaultName) {
-        const targetKinPath = await requestFileDialog({
-            mode: 'save',
-            initialPath: dialogInitialPath,
-            defaultFilename: defaultName || appConfig.defaultFilename
-        });
-        await withBusy('Saving to Kin path...', async function() {
-            await saveDirectSessionToKinPath(targetKinPath, { allowOverwrite: true });
-        });
-        await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
-    }
-
-    async function promptDirectSaveAsForNewDocument(reason) {
-        if (currentKinPath || !directSessionId() || directSaveAsPromptOpen) return;
-        const version = directSessionVersion();
-        if (version && directLastPromptedVersion === version) return;
+    async function ensureKinSaveLocation(reason) {
+        if (!needsKinSaveLocation() || kinSaveFlowActive || directSaveAsPromptOpen) {
+            return;
+        }
+        kinSaveFlowActive = true;
         directSaveAsPromptOpen = true;
         void updateSaveCloseGate();
-        directLastPromptedVersion = version;
+        let targetKinPath = null;
         try {
             log('Prompting Save As for direct unsaved document:', reason || 'save');
-            await directSaveAs(appConfig.defaultFilename);
+            targetKinPath = await requestFileDialog({
+                mode: 'save',
+                initialPath: dialogInitialPath,
+                defaultFilename: appConfig.defaultFilename
+            });
+            currentKinPath = targetKinPath;
+            await withBusy('Saving to Kin path...', async function() {
+                await saveDirectSessionToKinPath(targetKinPath, { allowOverwrite: true });
+            });
+            if (reason !== 'editor-save') {
+                await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
+            }
         } catch (error) {
+            if (targetKinPath) {
+                currentKinPath = null;
+            }
             if (error && error.message === 'cancel') {
                 if (reason === 'close') {
                     throw error;
@@ -1176,9 +1213,79 @@ export function bootstrapOnlyOfficeApp(config) {
                 throw error;
             }
         } finally {
+            kinSaveFlowActive = false;
             directSaveAsPromptOpen = false;
             void updateSaveCloseGate();
         }
+    }
+
+    async function directSaveAs(defaultName) {
+        if (kinSaveFlowActive || directSaveAsPromptOpen) {
+            return;
+        }
+        kinSaveFlowActive = true;
+        directSaveAsPromptOpen = true;
+        void updateSaveCloseGate();
+        let targetKinPath = null;
+        try {
+            targetKinPath = await requestFileDialog({
+                mode: 'save',
+                initialPath: dialogInitialPath,
+                defaultFilename: defaultName || appConfig.defaultFilename
+            });
+            currentKinPath = targetKinPath;
+            await withBusy('Saving to Kin path...', async function() {
+                await saveDirectSessionToKinPath(targetKinPath, { allowOverwrite: true });
+            });
+            await openAlert('Saved to ' + targetKinPath + '.', 'Saved');
+        } catch (error) {
+            if (targetKinPath) {
+                currentKinPath = null;
+            }
+            throw error;
+        } finally {
+            kinSaveFlowActive = false;
+            directSaveAsPromptOpen = false;
+            void updateSaveCloseGate();
+        }
+    }
+
+    async function promptDirectSaveAsForNewDocument(reason) {
+        if (currentKinPath || !directSessionId()) {
+            return;
+        }
+        await ensureKinSaveLocation(reason === 'close' ? 'close' : reason);
+    }
+
+    async function handleEditorSaved() {
+        if (kinSaveFlowActive) {
+            return;
+        }
+        if (handleEditorSavedPromise) {
+            return handleEditorSavedPromise;
+        }
+        handleEditorSavedPromise = (async function() {
+            try {
+                if (needsKinSaveLocation()) {
+                    try {
+                        await ensureKinSaveLocation('editor-save');
+                    } catch (error) {
+                        if (!error || error.message !== 'cancel') {
+                            log('Editor save location failed:', error && error.message ? error.message : error);
+                        }
+                    }
+                    return;
+                }
+                if (directEditorDirty) {
+                    await flushDirectAutosaveToKin();
+                    return;
+                }
+                await syncAfterEditorReportedSaved();
+            } finally {
+                handleEditorSavedPromise = null;
+            }
+        })();
+        return handleEditorSavedPromise;
     }
 
     async function handleMenuCommand(command) {
@@ -1202,7 +1309,7 @@ export function bootstrapOnlyOfficeApp(config) {
                     return;
                 }
                 if (!currentKinPath) {
-                    await directSaveAs(appConfig.defaultFilename);
+                    await ensureKinSaveLocation('menu-save');
                     return;
                 }
                 await withBusy('Saving to Kin path...', async function() {
@@ -1244,17 +1351,22 @@ export function bootstrapOnlyOfficeApp(config) {
                 scheduleDirectAutosaveFlush();
                 updateDirectPollInterval();
             } else if (data.changed === false) {
-                directEditorDirty = false;
-                syncAfterEditorReportedSaved().catch(function(error) {
+                handleEditorSaved().catch(function(error) {
                     log('Post-save Kin sync failed:', error && error.message ? error.message : error);
                 });
             }
             return;
         }
+        if (data.event === 'documentSaved' || data.event === 'saveDocument') {
+            handleEditorSaved().catch(function(error) {
+                log('Post-save Kin sync failed:', error && error.message ? error.message : error);
+            });
+            return;
+        }
         if (data.event === 'editorKeydown') {
             const key = String(data.key || '').toLowerCase();
-            if ((data.ctrlKey || data.metaKey) && key === 's' && !currentKinPath) {
-                await promptDirectSaveAsForNewDocument('keyboard-save');
+            if ((data.ctrlKey || data.metaKey) && key === 's' && needsKinSaveLocation()) {
+                await ensureKinSaveLocation('keyboard-save');
             }
             return;
         }

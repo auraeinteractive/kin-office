@@ -135,10 +135,17 @@
                     post({ event: 'ready' });
                 },
                 onDocumentStateChange: function(event) {
+                    var saved = !(event && event.data);
                     post({
                         event: 'documentStateChange',
-                        changed: !!(event && event.data)
+                        changed: !saved
                     });
+                    if (saved) {
+                        post({ event: 'documentSaved' });
+                    }
+                },
+                onSaveDocument: function() {
+                    post({ event: 'saveDocument' });
                 },
                 onRequestSaveAs: function(event) {
                     post({
