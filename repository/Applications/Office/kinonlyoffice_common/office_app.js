@@ -56,7 +56,7 @@ const SAVE_CLOSE_LONG_DELAY_MS = 5000;
 const KIN_SYNC_FOOTER = {
     idle: { label: '', tone: 'ok' },
     saved: { label: 'Saved to Kin', tone: 'ok' },
-    dirty: { label: 'Unsaved - autosaving...', tone: 'pending' },
+    dirty: { label: 'Unsaved - press Ctrl+S', tone: 'dirty' },
     saving: { label: 'Saving to Kin...', tone: 'pending' },
     error: { label: 'Save failed - File > Save to retry', tone: 'error' }
 };
@@ -398,6 +398,7 @@ export function bootstrapOnlyOfficeApp(config) {
             '    opacity: 1;',
             '}',
             '#kinOnlyOfficeFooter[data-tone="ok"] { background: rgba(28,76,40,0.85); }',
+            '#kinOnlyOfficeFooter[data-tone="dirty"] { background: rgba(76,60,16,0.88); }',
             '#kinOnlyOfficeFooter[data-tone="pending"] { background: rgba(76,60,16,0.88); }',
             '#kinOnlyOfficeFooter[data-tone="error"] { background: rgba(120,32,32,0.92); pointer-events: auto; cursor: default; }',
             '#kinOnlyOfficeFooter .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; opacity: 0.95; }',
