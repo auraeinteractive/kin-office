@@ -232,7 +232,69 @@ export function bootstrapOnlyOfficeApp(config) {
         return userRequestedClose && shouldBlockClose();
     }
 
+    function ensureCloseWaitingOverlay() {
+        var overlay = document.getElementById('kinOnlyOfficeCloseWaitingOverlay');
+        if (overlay) return overlay;
+
+        overlay = document.createElement('div');
+        overlay.id = 'kinOnlyOfficeCloseWaitingOverlay';
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.zIndex = '100000';
+        overlay.style.display = 'none';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.background = 'rgba(0,0,0,0.28)';
+
+        var card = document.createElement('div');
+        card.style.display = 'flex';
+        card.style.alignItems = 'center';
+        card.style.gap = '12px';
+        card.style.padding = '16px 20px';
+        card.style.borderRadius = '10px';
+        card.style.background = 'rgba(20,20,20,0.94)';
+        card.style.color = '#fff';
+        card.style.fontFamily = 'monospace';
+        card.style.fontSize = '13px';
+        card.style.boxShadow = '0 10px 26px rgba(0,0,0,0.35)';
+
+        var spinner = document.createElement('div');
+        spinner.style.width = '18px';
+        spinner.style.height = '18px';
+        spinner.style.border = '2px solid rgba(255,255,255,0.35)';
+        spinner.style.borderTopColor = '#fff';
+        spinner.style.borderRadius = '50%';
+        spinner.style.animation = 'kinOnlyOfficeCloseSpin 0.8s linear infinite';
+
+        var text = document.createElement('div');
+        text.textContent = 'Waiting to close...';
+
+        var style = document.getElementById('kinOnlyOfficeCloseWaitingStyle');
+        if (!style) {
+            style = document.createElement('style');
+            style.id = 'kinOnlyOfficeCloseWaitingStyle';
+            style.textContent = '@keyframes kinOnlyOfficeCloseSpin { to { transform: rotate(360deg); } }';
+            document.head.appendChild(style);
+        }
+
+        card.appendChild(spinner);
+        card.appendChild(text);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    function setCloseWaitingOverlayVisible(visible) {
+        var overlay = visible
+            ? ensureCloseWaitingOverlay()
+            : document.getElementById('kinOnlyOfficeCloseWaitingOverlay');
+        if (!overlay) return;
+        overlay.style.display = visible ? 'flex' : 'none';
+    }
+
     function updateSaveCloseGate() {
+        const block = shouldBlockClose();
+        setCloseWaitingOverlayVisible(userRequestedClose && block);
         if (!kinWindow) {
             if (!saveCloseGateWarned) {
                 saveCloseGateWarned = true;
@@ -240,7 +302,6 @@ export function bootstrapOnlyOfficeApp(config) {
             }
             return Promise.resolve();
         }
-        const block = shouldBlockClose();
         const title = shouldShowCloseWaitingTitle()
             ? baseWindowTitle + SAVE_CLOSE_TITLE_SUFFIX
             : baseWindowTitle;
@@ -841,8 +902,7 @@ export function bootstrapOnlyOfficeApp(config) {
         return base64ToBytes(response.data_base64 || '');
     }
 
-    async function ensureDirectSessionFlushed(options) {
-        const opts = options || {};
+    async function ensureDirectSessionFlushed() {
         const id = directSessionId();
         if (!id) return;
 
@@ -854,7 +914,7 @@ export function bootstrapOnlyOfficeApp(config) {
 
         const version = Number(state.version || 0);
         const savePending = !!state.savePending;
-        if (!opts.requireFreshSave && version > directLastPersistedVersion && !savePending) {
+        if (version > directLastPersistedVersion && !savePending) {
             return;
         }
 
@@ -865,8 +925,18 @@ export function bootstrapOnlyOfficeApp(config) {
             if (forceResult && forceResult.accepted === true) {
                 // fall through to version-bump poll below
             } else if (dsError === 4) {
-                if (opts.requireFreshSave) {
-                    throw new Error('Save blocked: editor changes were not flushed by Document Server');
+                for (let i = 0; i < DIRECT_FLUSH_MAX_POLLS; i += 1) {
+                    const polled = await refreshDirectState();
+                    const polledState = polled && polled.state ? polled.state : null;
+                    const polledVersion = polledState ? Number(polledState.version || 0) : version;
+                    const polledPending = polledState ? !!polledState.savePending : savePending;
+                    if (polledVersion > directLastPersistedVersion && !polledPending) {
+                        return;
+                    }
+                    if (polledVersion > beforeVersion) {
+                        return;
+                    }
+                    await waitMs(DIRECT_FLUSH_POLL_MS);
                 }
                 log('Direct force-save: no pending changes (DS error 4); using current connector content.');
                 return;
@@ -895,7 +965,7 @@ export function bootstrapOnlyOfficeApp(config) {
             throw new Error('No direct ONLYOFFICE document is open');
         }
         const saveDirtyRevision = directEditorDirtyRevision;
-        await ensureDirectSessionFlushed({ requireFreshSave: directEditorDirty });
+        await ensureDirectSessionFlushed();
         const bytes = await fetchDirectContent();
         const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
         await writeKinFileBytesSafe(targetKinPath, bytes, ft, saveOptions);
