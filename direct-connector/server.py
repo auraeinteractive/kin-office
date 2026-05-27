@@ -114,7 +114,6 @@ def session_public_urls(handler, session):
 
 def make_config(handler, session):
     urls = session_public_urls(handler, session)
-    has_kin_path = bool(str(session.get("file_path") or "").strip())
     return {
         "document": {
             "fileType": session["file_type"],
@@ -138,8 +137,8 @@ def make_config(handler, session):
                 "name": session.get("user_name") or "Kin User",
             },
             "customization": {
-                "autosave": has_kin_path,
-                "forcesave": True,
+                "autosave": False,
+                "forcesave": False,
             },
         },
         "type": "desktop",
