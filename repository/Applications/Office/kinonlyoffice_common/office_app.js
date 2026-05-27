@@ -56,17 +56,11 @@ const DIRECT_REFRESH_DEBOUNCE_MS = 300;
 /** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
 const SAVE_CLOSE_LONG_DELAY_MS = 5000;
-const KIN_SYNC_TITLE = {
-    saved: '',
-    dirty: ' — Unsaved',
-    saving: ' — Saving to Kin…',
-    error: ' — Save failed'
-};
 const KIN_SYNC_FOOTER = {
     saved: { label: 'Saved to Kin', tone: 'ok' },
-    dirty: { label: 'Unsaved — autosaving…', tone: 'pending' },
-    saving: { label: 'Saving to Kin…', tone: 'pending' },
-    error: { label: 'Save failed — File → Save to retry', tone: 'error' }
+    dirty: { label: 'Unsaved - autosaving...', tone: 'pending' },
+    saving: { label: 'Saving to Kin...', tone: 'pending' },
+    error: { label: 'Save failed - File > Save to retry', tone: 'error' }
 };
 
 function isZipLocalHeader(bytes) {
@@ -258,10 +252,10 @@ export function bootstrapOnlyOfficeApp(config) {
         const reason = computeCloseBlockReason();
         const baseDetail = reason.detail || '';
         const detail = closeGateLongRunning
-            ? 'Save is taking longer than expected — File → Save to retry or choose another location.'
+            ? 'Save is taking longer than expected. Use File > Save to retry or choose another location.'
             : baseDetail;
         setCloseOverlayVisible(true, {
-            reason: reason.reason || 'Waiting for save before closing…',
+            reason: reason.reason || 'Waiting for save before closing...',
             detail: detail,
             disableButton: directSyncing || saveCloseHold > 0 || directSaveAsPromptOpen
         });
@@ -394,7 +388,7 @@ export function bootstrapOnlyOfficeApp(config) {
         style.textContent = [
             '@keyframes kinOnlyOfficeSpin { to { transform: rotate(360deg); } }',
             '#kinOnlyOfficeFooter {',
-            '    position: fixed; top: 8px; right: 12px; z-index: 99998;',
+            '    position: fixed; top: 4px; right: 32px; z-index: 99998;',
             '    display: flex; align-items: center; gap: 8px;',
             '    padding: 5px 10px; border-radius: 999px;',
             '    background: rgba(20,20,20,0.78); color: #fff;',
@@ -471,7 +465,7 @@ export function bootstrapOnlyOfficeApp(config) {
         if (!label) return;
         let text = cfg.label;
         if (kinSyncState === 'dirty' && !currentKinPath) {
-            text = 'Not saved to Kin — use File → Save As';
+            text = 'Not saved to Kin - use File > Save As';
         } else if (kinSyncState === 'error' && kinSyncDetail) {
             text = 'Save failed: ' + kinSyncDetail;
         }
@@ -492,7 +486,7 @@ export function bootstrapOnlyOfficeApp(config) {
         spinner.className = 'spinner';
         const reason = document.createElement('div');
         reason.className = 'reason';
-        reason.textContent = 'Saving to Kin…';
+        reason.textContent = 'Saving to Kin...';
         const detail = document.createElement('div');
         detail.className = 'detail';
         detail.textContent = '';
@@ -523,7 +517,7 @@ export function bootstrapOnlyOfficeApp(config) {
         const card = overlay.querySelector('#kinOnlyOfficeCloseWaitingCard');
         if (card) {
             const reasonEl = card.querySelector('.reason');
-            if (reasonEl) reasonEl.textContent = opts.reason || 'Saving to Kin…';
+            if (reasonEl) reasonEl.textContent = opts.reason || 'Saving to Kin...';
             const detailEl = card.querySelector('.detail');
             if (detailEl) detailEl.textContent = opts.detail || '';
             const button = card.querySelector('button');
@@ -537,31 +531,32 @@ export function bootstrapOnlyOfficeApp(config) {
 
     function computeCloseBlockReason() {
         if (directSyncing || saveDrainActive || saveCloseHold > 0) {
-            return { reason: 'Saving to Kin…', detail: currentKinPath || '' };
+            return { reason: 'Saving to Kin...', detail: currentKinPath || '' };
         }
         if (directSaveAsPromptOpen) {
-            return { reason: 'Pick a Kin location to save to…', detail: '' };
+            return { reason: 'Pick a Kin location to save to...', detail: '' };
         }
         if (hasUnpersistedKinChanges()) {
             if (!currentKinPath) {
                 return {
-                    reason: 'Unsaved — choose a location to save',
-                    detail: 'Use File → Save As to pick a Kin path.'
+                    reason: 'Unsaved - choose a location to save',
+                    detail: 'Use File > Save As to pick a Kin path.'
                 };
             }
-            return { reason: 'Autosaving to Kin…', detail: currentKinPath };
+            return { reason: 'Autosaving to Kin...', detail: currentKinPath };
         }
         return { reason: '', detail: '' };
     }
 
     function applyTitle() {
         if (!kinWindow) return Promise.resolve();
+        // Save state lives in the footer bubble, not the title bar. The title
+        // only gains a suffix when the user has actively tried to close and
+        // the gate is holding them, so they know why.
         let suffix = '';
-        if (shouldBlockClose()) {
+        if (userRequestedClose && shouldBlockClose()) {
             const reason = computeCloseBlockReason().reason;
-            suffix = ' — ' + (reason || 'Waiting for save before closing…');
-        } else {
-            suffix = KIN_SYNC_TITLE[kinSyncState] || '';
+            suffix = ' - ' + (reason || 'Waiting for save before closing...');
         }
         return kinWindow.setTitle(baseWindowTitle + suffix).catch(function(err) {
             log('setTitle failed:', err && err.message ? err.message : err);
@@ -569,7 +564,7 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     function setKinSyncState(next, detail) {
-        if (next && KIN_SYNC_TITLE.hasOwnProperty(next)) {
+        if (next && KIN_SYNC_FOOTER.hasOwnProperty(next)) {
             kinSyncState = next;
         }
         if (detail !== undefined) {
@@ -1111,7 +1106,7 @@ export function bootstrapOnlyOfficeApp(config) {
                     log('Direct force-save: no pending changes (DS error 4); using current connector content.');
                     return;
                 }
-                throw new Error('No changes have been saved yet — start typing or use Save As.');
+                throw new Error('No changes have been saved yet. Start typing or use Save As.');
             } else {
                 log('Direct force-save was not accepted by Document Server', forceResult && forceResult.body ? forceResult.body : '');
             }
@@ -1173,7 +1168,7 @@ export function bootstrapOnlyOfficeApp(config) {
             const savePending = directSessionSavePending();
             if (!currentKinPath) {
                 if (nextVersion > directLastPersistedVersion && !savePending) {
-                    setKinSyncState('dirty', 'No Kin location yet — use File → Save As');
+                    setKinSyncState('dirty', '');
                 }
                 return false;
             }
@@ -1317,7 +1312,9 @@ export function bootstrapOnlyOfficeApp(config) {
         currentKinPath = null;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         await openDirectEditor(session);
-        setKinSyncState('dirty', 'No Kin location yet — use File → Save As');
+        // Fresh blank document: nothing to save yet. The footer stays "Saved"
+        // until the user actually edits (documentStateChange(true) flips it).
+        setKinSyncState('saved', '');
     }
 
     async function directSaveAs(defaultName) {
