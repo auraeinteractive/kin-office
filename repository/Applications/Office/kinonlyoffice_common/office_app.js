@@ -50,9 +50,6 @@ const DIRECT_FLUSH_POLL_MS = 500;
 const DIRECT_FLUSH_MAX_POLLS = 20;
 const DIRECT_SAVE_SYNC_POLLS = 6;
 const DIRECT_SAVE_SYNC_POLL_MS = 400;
-const DIRECT_POLL_IDLE_MS = 4000;
-const DIRECT_POLL_PENDING_MS = 500;
-const DIRECT_REFRESH_DEBOUNCE_MS = 300;
 /** Match Kin http.service KIN_HTTP_STAGE_THRESHOLD — use upload API for larger binary writes. */
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
 const SAVE_CLOSE_LONG_DELAY_MS = 5000;
@@ -147,12 +144,10 @@ export function bootstrapOnlyOfficeApp(config) {
 
     let currentKinPath = null;
     let directSession = null;
-    let directStatePollingInterval = null;
     let directSyncing = false;
     let directSaveAsPromptOpen = false;
     let directLastPromptedVersion = 0;
     let directLastPersistedVersion = 0;
-    let directRefreshDebounceTimer = null;
     let saveCloseHold = 0;
     let saveCloseGateWarned = false;
     let userRequestedClose = false;
@@ -163,6 +158,7 @@ export function bootstrapOnlyOfficeApp(config) {
     let kinSyncFooterHideTimer = null;
     let closeGateStartedAt = 0;
     let closeGateLongRunning = false;
+    let editorDirtySinceKinSave = false;
 
     const instanceId = getInstanceId();
     const baseWindowTitle = String(appConfig.windowTitle || 'OnlyOffice');
@@ -195,10 +191,11 @@ export function bootstrapOnlyOfficeApp(config) {
         if (!directSessionId()) {
             return false;
         }
-        return directSessionVersion() > directLastPersistedVersion;
+        return editorDirtySinceKinSave || directSessionVersion() > directLastPersistedVersion;
     }
 
     function discardUnpersistedKinChanges() {
+        editorDirtySinceKinSave = false;
         directLastPersistedVersion = directSessionVersion();
     }
 
@@ -237,8 +234,7 @@ export function bootstrapOnlyOfficeApp(config) {
     function refreshCloseOverlay() {
         const block = shouldBlockClose();
         // Dim the editor only when the user is actively trying to close and
-        // the save gate is what's stopping them. Routine autosaves keep the
-        // editor live (the title + footer indicators carry that state).
+        // the save gate is what's stopping them.
         const showOverlay = block && userRequestedClose;
         if (!showOverlay) {
             closeGateStartedAt = 0;
@@ -609,7 +605,7 @@ export function bootstrapOnlyOfficeApp(config) {
         if (hasUnpersistedKinChanges()) {
             setKinSyncState(currentKinPath ? 'dirty' : 'idle', currentKinPath || '');
         } else if (directSessionId()) {
-            setKinSyncState(currentKinPath ? 'saved' : 'idle', currentKinPath || '');
+            setKinSyncState('idle', currentKinPath || '');
         }
     }
 
@@ -1181,6 +1177,7 @@ export function bootstrapOnlyOfficeApp(config) {
         currentKinPath = targetKinPath;
         await refreshDirectState();
         directLastPersistedVersion = directSessionVersion();
+        editorDirtySinceKinSave = false;
         await updateDirectDocumentMeta(targetKinPath);
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
@@ -1218,7 +1215,7 @@ export function bootstrapOnlyOfficeApp(config) {
         }
     }
 
-    async function syncDirectAutosaveToKin() {
+    async function syncConnectorSaveToKin() {
         if (directSyncing || !directSessionId()) {
             return false;
         }
@@ -1240,22 +1237,26 @@ export function bootstrapOnlyOfficeApp(config) {
                     setKinSyncState('saving', currentKinPath || '');
                     await persistConnectorContentToKinPath(currentKinPath);
                 } catch (error) {
-                    log('Direct autosave write failed:', error && error.message ? error.message : error);
+                    log('Direct connector save write failed:', error && error.message ? error.message : error);
                     setKinSyncState('error', error && error.message ? error.message : String(error));
                     return false;
                 }
-                log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
+                log('Direct connector save synced version', nextVersion, 'to', currentKinPath);
                 return directLastPersistedVersion > persistedBefore;
             }
             if (directSession && directSession.info) {
                 writeKinOnlyOfficeInfo(currentKinPath, directSession.info).catch(function(err) {
-                    log('writeKinOnlyOfficeInfo (autosave) failed:', err && err.message ? err.message : err);
+                    log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
                 });
             }
-            recomputeKinSyncState();
+            if (editorDirtySinceKinSave) {
+                setKinSyncState(currentKinPath ? 'dirty' : 'idle', currentKinPath || '');
+            } else {
+                recomputeKinSyncState();
+            }
             return false;
         } catch (error) {
-            log('Direct autosave sync failed:', error && error.message ? error.message : error);
+            log('Direct connector save sync failed:', error && error.message ? error.message : error);
             return false;
         } finally {
             directSyncing = false;
@@ -1264,27 +1265,25 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
     /**
-     * Reacts to DS's "document state changed to clean" event. With the
-     * connector autosave loop running every ~7 s, in most cases the connector
-     * has already received the latest bytes and we just need to write them.
-     * If not, we poll briefly; we deliberately do NOT pop a modal alert here
-     * because this is a background notification, not a user action.
+     * Reacts to DS's "document state changed to clean" event after an explicit
+     * editor save. Autosave is disabled; this exists for OnlyOffice toolbar
+     * Save / Ctrl+S events that trigger a forcesave callback.
      */
     async function syncAfterEditorReportedSaved() {
         beginSaveCloseHold();
         try {
             await refreshDirectState();
-            await syncDirectAutosaveToKin();
+            await syncConnectorSaveToKin();
             for (let index = 0; index < DIRECT_SAVE_SYNC_POLLS; index += 1) {
                 if (!currentKinPath) return;
                 if (!hasUnpersistedKinChanges() && kinSyncState !== 'error') return;
                 await waitMs(DIRECT_SAVE_SYNC_POLL_MS);
                 await refreshDirectState();
-                await syncDirectAutosaveToKin();
+                await syncConnectorSaveToKin();
             }
             if (hasUnpersistedKinChanges()) {
                 log('syncAfterEditorReportedSaved: connector version did not catch up within',
-                    DIRECT_SAVE_SYNC_POLLS * DIRECT_SAVE_SYNC_POLL_MS, 'ms - autosave loop will retry.');
+                    DIRECT_SAVE_SYNC_POLLS * DIRECT_SAVE_SYNC_POLL_MS, 'ms after explicit save.');
             }
         } finally {
             endSaveCloseHold();
@@ -1292,44 +1291,8 @@ export function bootstrapOnlyOfficeApp(config) {
     }
 
 
-    function updateDirectPollInterval() {
-        if (directStatePollingInterval) {
-            clearInterval(directStatePollingInterval);
-            directStatePollingInterval = null;
-        }
-        const ms = directSessionSavePending() ? DIRECT_POLL_PENDING_MS : DIRECT_POLL_IDLE_MS;
-        directStatePollingInterval = setInterval(function() {
-            syncDirectAutosaveToKin();
-        }, ms);
-    }
-
-    function scheduleDirectRefreshDebounce() {
-        if (directRefreshDebounceTimer) clearTimeout(directRefreshDebounceTimer);
-        directRefreshDebounceTimer = setTimeout(function() {
-            directRefreshDebounceTimer = null;
-            refreshDirectState().then(function() {
-                updateDirectPollInterval();
-                syncDirectAutosaveToKin();
-            }).catch(function(err) {
-                log('Debounced refresh failed:', err && err.message ? err.message : err);
-            });
-        }, DIRECT_REFRESH_DEBOUNCE_MS);
-    }
-
-    function startDirectStatePolling() {
-        if (directStatePollingInterval) return;
-        updateDirectPollInterval();
-    }
-
     function stopDirectStatePolling() {
-        if (directStatePollingInterval) {
-            clearInterval(directStatePollingInterval);
-            directStatePollingInterval = null;
-        }
-        if (directRefreshDebounceTimer) {
-            clearTimeout(directRefreshDebounceTimer);
-            directRefreshDebounceTimer = null;
-        }
+        // Autosave is disabled. This function remains for the logout path.
     }
 
     async function openDirectEditor(session) {
@@ -1338,7 +1301,6 @@ export function bootstrapOnlyOfficeApp(config) {
             throw new Error('Direct connector did not return an editor URL');
         }
         iframeEl.src = url;
-        startDirectStatePolling();
     }
 
     async function openDirectKinPath(kinPath) {
@@ -1355,6 +1317,7 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = kinPath;
+        editorDirtySinceKinSave = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         if (session.info) {
             writeKinOnlyOfficeInfo(kinPath, session.info).catch(function(err) {
@@ -1362,7 +1325,7 @@ export function bootstrapOnlyOfficeApp(config) {
             });
         }
         await openDirectEditor(session);
-        setKinSyncState('saved', kinPath);
+        setKinSyncState('idle', '');
         return true;
     }
 
@@ -1374,6 +1337,7 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = null;
+        editorDirtySinceKinSave = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         await openDirectEditor(session);
         // Fresh blank document: no path, no filename on disk, nothing to report.
@@ -1476,6 +1440,7 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'documentStateChange') {
             if (data.changed === true) {
+                editorDirtySinceKinSave = true;
                 if (!currentKinPath) {
                     // ONLYOFFICE can report an initial dirty state for a fresh
                     // template before the user has typed. It also has no Kin
@@ -1483,8 +1448,6 @@ export function bootstrapOnlyOfficeApp(config) {
                 } else if (kinSyncState !== 'saving' && kinSyncState !== 'error') {
                     setKinSyncState('dirty', currentKinPath || '');
                 }
-                scheduleDirectRefreshDebounce();
-                updateDirectPollInterval();
             } else if (data.changed === false) {
                 syncAfterEditorReportedSaved().catch(function(error) {
                     log('Post-save Kin sync failed:', error && error.message ? error.message : error);
@@ -1494,8 +1457,20 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'editorKeydown') {
             const key = String(data.key || '').toLowerCase();
-            if ((data.ctrlKey || data.metaKey) && key === 's' && !currentKinPath) {
-                await promptDirectSaveAsForNewDocument('keyboard-save');
+            if ((data.ctrlKey || data.metaKey) && key === 's') {
+                try {
+                    if (!currentKinPath) {
+                        await promptDirectSaveAsForNewDocument('keyboard-save');
+                    } else {
+                        await withBusy('Saving to Kin path...', async function() {
+                            await saveDirectSessionToKinPath(currentKinPath);
+                        });
+                    }
+                } catch (error) {
+                    if (!error || error.message !== 'cancel') {
+                        await openAlert(error && error.message ? error.message : String(error), 'Save failed');
+                    }
+                }
             }
             return;
         }
