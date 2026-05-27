@@ -49,7 +49,7 @@ Details: [architecture.md](../architecture.md).
 1. New document: Documents app opens blank editor without login.
 2. Open `Home:…/file.docx`: content matches; `.info` written.
 3. Autosave: edit with path set; file on disk updates within a few seconds (mtime/size).
-4. Save / Save As: new document toolbar Save opens Kin Save As once (no dialog loop); after first save header shows chosen filename; manual menu writes correct bytes; reopen shows edits.
+4. Save / Save As: manual menu writes correct bytes; reopen shows edits.
 5. `curl -fsS http://127.0.0.1:8000/direct/health` and DS `api.js` on `:5003`.
 6. Packaged: `systemctl restart kin-office` — no `nextcloud` container.
 

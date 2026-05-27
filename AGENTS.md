@@ -6,7 +6,6 @@ Run OnlyOffice Document Server in Docker and expose it through Kin nginx at `htt
 
 ## Important operational rules
 
-- **DON'T test on localhost unless asking** You don't know that onlyoffice runs locally!
 - **NEVER delete existing Docker volumes** unless the user explicitly authorizes it.
 - **DO NOT modify docker-compose.yml** to remove the `onlyoffice` service — it is the Document Server.
 - **deploy.sh** — Bootstrap: compose up, nginx `/ds/` + `/direct/`, DS safeUrls. Keep edits focused.
