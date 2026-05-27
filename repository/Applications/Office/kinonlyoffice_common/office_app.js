@@ -656,15 +656,17 @@ export function bootstrapOnlyOfficeApp(config) {
         const isSaveBusy = /sav/i.test(String(message || ''));
         if (isSaveBusy) {
             beginSaveCloseHold();
+            try {
+                return await operation();
+            } finally {
+                endSaveCloseHold();
+            }
         }
-        showBusy(message);
         try {
+            showBusy(message);
             return await operation();
         } finally {
             hideBusy();
-            if (isSaveBusy) {
-                endSaveCloseHold();
-            }
         }
     }
 
@@ -1179,7 +1181,6 @@ export function bootstrapOnlyOfficeApp(config) {
         await refreshDirectState();
         directLastPersistedVersion = directSessionVersion();
         editorDirtySinceKinSave = false;
-        await updateDirectDocumentMeta(targetKinPath);
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
@@ -1187,6 +1188,9 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         requestWorkspaceRefresh();
         setKinSyncState('saved', targetKinPath || '');
+        updateDirectDocumentMeta(targetKinPath).catch(function(err) {
+            log('updateDirectDocumentMeta after save failed:', err && err.message ? err.message : err);
+        });
     }
 
     async function updateDirectDocumentMeta(targetKinPath) {
