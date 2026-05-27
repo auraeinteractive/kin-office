@@ -1181,6 +1181,7 @@ export function bootstrapOnlyOfficeApp(config) {
         currentKinPath = targetKinPath;
         await refreshDirectState();
         directLastPersistedVersion = directSessionVersion();
+        await updateDirectDocumentMeta(targetKinPath);
         if (directSession && directSession.info) {
             writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
                 log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
@@ -1188,6 +1189,33 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         requestWorkspaceRefresh();
         setKinSyncState('saved', targetKinPath || '');
+    }
+
+    async function updateDirectDocumentMeta(targetKinPath) {
+        const id = directSessionId();
+        const title = kinPathBaseName(targetKinPath);
+        if (!id || !title) return;
+        try {
+            const response = await directPostJson(
+                '/session/' + encodeURIComponent(id) + '/document-meta',
+                { title: title, path: targetKinPath }
+            );
+            if (response && response.filename && directSession) {
+                directSession.filename = response.filename;
+            }
+            if (response && response.info) {
+                directSession.info = response.info;
+            }
+            if (response && response.state) {
+                directSession.state = response.state;
+                directSession.version = response.state.version;
+            }
+            if (response && response.metaError != null) {
+                log('Direct document-meta failed:', response.metaError);
+            }
+        } catch (error) {
+            log('Direct document-meta request failed:', error && error.message ? error.message : error);
+        }
     }
 
     async function syncDirectAutosaveToKin() {
