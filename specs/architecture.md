@@ -83,10 +83,33 @@ sequenceDiagram
 
 Autosave polling: **500 ms** while `savePending`, **4 s** idle.
 
-## Troubleshooting “saved but file unchanged”
+## Server-side autosave loop
 
-1. Connector never got callback — check `journalctl -u kin-office | grep direct-connector` and DS → `onlyoffice-direct:8000` reachability.
-2. No Kin path — new document without Save As has no `currentKinPath`; nothing is written to `Home:`.
-3. Connector `version` did not advance — Kin sync is skipped; use File → Save and watch for “Save failed” dialog.
+DS only fires its callback on close (status 2) or when forcesave is triggered (status 6). It does **not** call back on internal "All changes saved" — that indicator reflects DS's own OT model, not the storage. To convert DS to real autosave-to-storage, the connector runs a background thread that POSTs `forcesave` to `CommandService.ashx` for every active session at a regular interval. DS responds with `error: 0` when there are real edits (status 6 callback follows with bytes) and `error: 4` when nothing changed (cheap no-op).
+
+| Env | Default | Purpose |
+|-----|---------|---------|
+| `DIRECT_AUTOSAVE_INTERVAL_SECONDS` | `7` | Period of the connector autosave thread |
+| `DIRECT_AUTOSAVE_IDLE_GRACE_SECONDS` | `60` | Skip sessions whose `last_seen` is older than this |
+| `DIRECT_CALLBACK_DOWNLOAD_RETRIES` | `3` | Callback URL download attempts before giving up |
+
+Status callback download is retried with a 500 ms backoff to ride out the few-hundred-ms window where DS sometimes returns 502 while finalizing.
+
+## Honest sync indicator (client)
+
+`office_app.js` tracks `kinSyncState ∈ { saved, dirty, saving, error }`. It drives:
+
+- **Window title suffix** via `kin.classes.Window.setTitle` — ` — Saving to Kin…` while a write is in flight, ` — Unsaved`, ` — Save failed`. When the close gate is engaged the suffix becomes ` — <closeBlockReason>` (e.g. `Autosaving to Kin…`, `Unsaved — choose a location to save`) so the user always knows why close is held.
+- **Footer pill** (top-right of the app shell, above the iframe) showing the same state with a coloured tone — green for saved, amber for in-flight, red for error.
+- **Dim close overlay** — only shown when the user has actually pressed close and the gate is blocking it. Carries a spinner, the reason text, and a "Save now" button. After ~5 s without progress the copy upgrades to "Save is taking longer than expected — File → Save to retry or choose another location."
+
+A "Saved" UX claim is only made after `writeKinFileBytesSafe` + readback succeeds. DS's own "All changes saved" toolbar text no longer drives any Kin-side promise.
+
+## Troubleshooting "saved but file unchanged"
+
+1. Connector autosave thread is silent — check `journalctl -u kin-office | grep "direct-connector: autosave"`. The loop should log `forcesave accepted` lines while a session is dirty. If they're missing, the connector container is unhealthy or DS CommandService is unreachable.
+2. Callback download failing — look for `direct-connector: fetch_url attempt N/3 failed`. DS → `onlyoffice-direct:8000` reachability or DS save errors.
+3. No Kin path — new document without Save As has no `currentKinPath`; the footer reads `Not saved to Kin — use File → Save As`. Pick a path.
+4. Connector `version` did not advance — Kin sync is skipped; the footer reads `Unsaved — autosaving…` or `Save failed`. Use File → Save and watch the connector logs.
 
 See [wbs/01-onlyoffice-direct-kinfs.md](wbs/01-onlyoffice-direct-kinfs.md) for acceptance tests.

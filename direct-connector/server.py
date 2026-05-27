@@ -4,6 +4,7 @@ import json
 import os
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -23,6 +24,10 @@ SESSION_TTL_SECONDS = int(os.environ.get("DIRECT_SESSION_TTL_SECONDS", str(8 * 6
 MAX_UPLOAD_BYTES = int(os.environ.get("DIRECT_MAX_UPLOAD_BYTES", str(64 * 1024 * 1024)))
 EDITOR_HTML = Path(__file__).with_name("editor.html").read_text(encoding="utf-8")
 TEMPLATE_DIR = Path(os.environ.get("DIRECT_TEMPLATE_DIR", "/app/templates"))
+AUTOSAVE_INTERVAL_SECONDS = max(1, int(os.environ.get("DIRECT_AUTOSAVE_INTERVAL_SECONDS", "7")))
+AUTOSAVE_IDLE_GRACE_SECONDS = max(5, int(os.environ.get("DIRECT_AUTOSAVE_IDLE_GRACE_SECONDS", "60")))
+CALLBACK_DOWNLOAD_MAX_ATTEMPTS = max(1, int(os.environ.get("DIRECT_CALLBACK_DOWNLOAD_RETRIES", "3")))
+CALLBACK_DOWNLOAD_RETRY_DELAY = float(os.environ.get("DIRECT_CALLBACK_DOWNLOAD_RETRY_DELAY", "0.5"))
 
 SESSIONS = {}
 _TEMPLATE_CACHE = {}
@@ -177,10 +182,14 @@ def session_state(session):
         "fileType": session["file_type"],
         "filename": session["filename"],
         "version": session["version"],
+        "lastSyncedVersion": session.get("last_synced_version") or 0,
         "lastSavedAt": session.get("last_saved_at"),
         "lastCallbackStatus": session.get("last_callback_status"),
         "lastCallbackAt": session.get("last_callback_at"),
+        "lastForcesaveAt": session.get("last_forcesave_at"),
+        "lastForcesaveError": session.get("last_forcesave_error"),
         "savePending": bool(session.get("save_pending")),
+        "dirty": bool(session.get("dirty")),
         "users": session.get("users", []),
     }
 
@@ -223,12 +232,16 @@ def create_session(data):
         "filename": filename,
         "content": content,
         "version": 1,
+        "last_synced_version": 1,
         "created_at": now(),
         "last_seen": now(),
         "last_saved_at": None,
         "last_callback_status": None,
         "last_callback_at": None,
+        "last_forcesave_at": None,
+        "last_forcesave_error": None,
         "save_pending": False,
+        "dirty": False,
         "user_id": user_id,
         "user_name": user_name,
         "users": [{"id": user_id, "name": user_name}],
@@ -289,6 +302,35 @@ def fetch_url(url):
     request = urllib.request.Request(target, headers={"User-Agent": "kin-onlyoffice-direct/1.0"})
     with urllib.request.urlopen(request, timeout=60, context=context) as response:
         return response.read()
+
+
+def fetch_url_with_retry(url, attempts=None, delay=None):
+    """Fetch DS callback download URLs with bounded retries.
+
+    DS occasionally returns 502/empty body for a few hundred milliseconds while
+    it finalizes a save; treating that as a hard failure makes status 6
+    callbacks drop the bytes and the connector keeps stale content forever."""
+    max_attempts = attempts if attempts is not None else CALLBACK_DOWNLOAD_MAX_ATTEMPTS
+    retry_delay = delay if delay is not None else CALLBACK_DOWNLOAD_RETRY_DELAY
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            data = fetch_url(url)
+        except (urllib.error.URLError, ssl.SSLError, ConnectionError, TimeoutError) as exc:
+            last_error = exc
+            print(
+                "direct-connector: fetch_url attempt %d/%d failed url=%s error=%s"
+                % (attempt, max_attempts, url, exc),
+                flush=True,
+            )
+            data = None
+        if data:
+            return data
+        if attempt < max_attempts:
+            time.sleep(retry_delay)
+    if last_error is not None:
+        raise last_error
+    raise ValueError("Empty body from %s" % url)
 
 
 def post_command(payload):
@@ -462,9 +504,11 @@ class Handler(BaseHTTPRequestHandler):
                     parsed = json.loads(text)
                 except Exception:
                     parsed = None
+                ds_error = parsed.get("error") if isinstance(parsed, dict) else None
+                session["last_forcesave_at"] = now()
+                session["last_forcesave_error"] = ds_error
                 if parsed and parsed.get("error") == 0:
                     session["save_pending"] = True
-                ds_error = parsed.get("error") if isinstance(parsed, dict) else None
                 self.send_json(200, {
                     "response": "success",
                     "status": status,
@@ -494,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 if status in (2, 6) and callback.get("url"):
                     try:
-                        content = fetch_url(str(callback.get("url")))
+                        content = fetch_url_with_retry(str(callback.get("url")))
                     except Exception as error:
                         print(
                             "direct-connector: callback download failed session=%s url=%s error=%s"
@@ -509,10 +553,13 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     session["content"] = content
                     session["version"] += 1
+                    session["last_synced_version"] = session["version"]
                     session["last_saved_at"] = now()
                     session["save_pending"] = False
+                    session["dirty"] = False
                 elif status == 1:
                     session["save_pending"] = True
+                    session["dirty"] = True
                 elif status == 4:
                     session["save_pending"] = False
                 self.send_json(200, {"error": 0})
@@ -526,7 +573,83 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(500, {"response": "fail", "message": str(error)})
 
 
+def autosave_once():
+    """Trigger DS forcesave for every session that looks active and dirty.
+
+    DS never fires its callback during normal editing — only on close (status
+    2) or after a forcesave (status 6). Without this loop, autosave 'works'
+    inside DS but bytes never reach the connector or the Kin disk."""
+    cutoff = now() - AUTOSAVE_IDLE_GRACE_SECONDS
+    snapshot = list(SESSIONS.items())
+    for sid, session in snapshot:
+        try:
+            if session.get("last_seen", 0) < cutoff:
+                continue
+            if not session.get("users"):
+                continue
+            # Always ping DS — error 4 is the cheap "nothing to save" path, and
+            # we cannot rely on a dirty flag since DS only fires status 1 on
+            # join/leave, not on every edit.
+            status, text = post_command({"c": "forcesave", "key": session["document_key"]})
+            parsed = None
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            ds_error = parsed.get("error") if isinstance(parsed, dict) else None
+            session["last_forcesave_at"] = now()
+            session["last_forcesave_error"] = ds_error
+            if ds_error == 0:
+                session["save_pending"] = True
+                print(
+                    "direct-connector: autosave forcesave accepted session=%s key=%s"
+                    % (sid, session["document_key"]),
+                    flush=True,
+                )
+            elif ds_error == 4:
+                session["dirty"] = False
+            elif ds_error in (1,):
+                print(
+                    "direct-connector: autosave dropping unknown session=%s key=%s (DS error %s)"
+                    % (sid, session["document_key"], ds_error),
+                    flush=True,
+                )
+            else:
+                print(
+                    "direct-connector: autosave forcesave rejected session=%s status=%s body=%s"
+                    % (sid, status, text[:200]),
+                    flush=True,
+                )
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as transient:
+            print(
+                "direct-connector: autosave transient error session=%s error=%s"
+                % (sid, transient),
+                flush=True,
+            )
+        except Exception as error:
+            print(
+                "direct-connector: autosave session=%s unexpected error=%s"
+                % (sid, error),
+                flush=True,
+            )
+
+
+def autosave_loop():
+    print(
+        "direct-connector: autosave loop interval=%ss idle_grace=%ss"
+        % (AUTOSAVE_INTERVAL_SECONDS, AUTOSAVE_IDLE_GRACE_SECONDS),
+        flush=True,
+    )
+    while True:
+        time.sleep(AUTOSAVE_INTERVAL_SECONDS)
+        try:
+            autosave_once()
+        except Exception as error:
+            print("direct-connector: autosave loop error: %s" % error, flush=True)
+
+
 if __name__ == "__main__":
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    threading.Thread(target=autosave_loop, name="autosave-loop", daemon=True).start()
     print(f"direct connector listening on {HOST}:{PORT}", flush=True)
     httpd.serve_forever()
