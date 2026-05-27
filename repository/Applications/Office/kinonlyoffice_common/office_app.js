@@ -387,9 +387,9 @@ export function bootstrapOnlyOfficeApp(config) {
         style.textContent = [
             '@keyframes kinOnlyOfficeSpin { to { transform: rotate(360deg); } }',
             '#kinOnlyOfficeFooter {',
-            '    position: fixed; top: 2px; right: 24px; z-index: 99998;',
+            '    position: fixed; top: 3px; right: 40px; z-index: 99998;',
             '    display: flex; align-items: center; gap: 8px;',
-            '    padding: 5px 10px; border-radius: 999px;',
+            '    padding: 2px 10px; border-radius: 999px;',
             '    background: rgba(20,20,20,0.78); color: #fff;',
             '    font: 12px/1 system-ui, -apple-system, "Segoe UI", monospace;',
             '    box-shadow: 0 2px 8px rgba(0,0,0,0.35);',
