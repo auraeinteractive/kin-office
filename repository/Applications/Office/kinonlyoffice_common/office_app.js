@@ -160,6 +160,7 @@ export function bootstrapOnlyOfficeApp(config) {
     let kinSyncDetail = '';
     let closeGateStartedAt = 0;
     let closeGateLongRunning = false;
+    let blankDocumentUserEdited = false;
 
     const instanceId = getInstanceId();
     const baseWindowTitle = String(appConfig.windowTitle || 'OnlyOffice');
@@ -1134,19 +1135,7 @@ export function bootstrapOnlyOfficeApp(config) {
         setKinSyncState('saving', targetKinPath || '');
         try {
             await ensureDirectSessionFlushed();
-            const bytes = await fetchDirectContent();
-            const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
-            await writeKinFileBytesSafe(targetKinPath, bytes, ft, saveOptions);
-            currentKinPath = targetKinPath;
-            await refreshDirectState();
-            directLastPersistedVersion = directSessionVersion();
-            if (directSession && directSession.info) {
-                writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
-                    log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
-                });
-            }
-            requestWorkspaceRefresh();
-            setKinSyncState('saved', targetKinPath || '');
+            await persistConnectorContentToKinPath(targetKinPath, saveOptions);
         } catch (error) {
             const message = error && error.message ? error.message : String(error);
             setKinSyncState('error', message);
@@ -1154,6 +1143,22 @@ export function bootstrapOnlyOfficeApp(config) {
         } finally {
             void updateSaveCloseGate();
         }
+    }
+
+    async function persistConnectorContentToKinPath(targetKinPath, saveOptions) {
+        const bytes = await fetchDirectContent();
+        const ft = fileTypeFromName(kinPathBaseName(targetKinPath), appConfig.fileType);
+        await writeKinFileBytesSafe(targetKinPath, bytes, ft, Object.assign({ allowOverwrite: true }, saveOptions || {}));
+        currentKinPath = targetKinPath;
+        await refreshDirectState();
+        directLastPersistedVersion = directSessionVersion();
+        if (directSession && directSession.info) {
+            writeKinOnlyOfficeInfo(targetKinPath, directSession.info).catch(function(err) {
+                log('writeKinOnlyOfficeInfo (save) failed:', err && err.message ? err.message : err);
+            });
+        }
+        requestWorkspaceRefresh();
+        setKinSyncState('saved', targetKinPath || '');
     }
 
     async function syncDirectAutosaveToKin() {
@@ -1175,9 +1180,11 @@ export function bootstrapOnlyOfficeApp(config) {
             if (nextVersion > directLastPersistedVersion && !savePending) {
                 const persistedBefore = directLastPersistedVersion;
                 try {
-                    await saveDirectSessionToKinPath(currentKinPath);
+                    setKinSyncState('saving', currentKinPath || '');
+                    await persistConnectorContentToKinPath(currentKinPath);
                 } catch (error) {
                     log('Direct autosave write failed:', error && error.message ? error.message : error);
+                    setKinSyncState('error', error && error.message ? error.message : String(error));
                     return false;
                 }
                 log('Direct autosave synced version', nextVersion, 'to', currentKinPath);
@@ -1220,7 +1227,7 @@ export function bootstrapOnlyOfficeApp(config) {
             }
             if (hasUnpersistedKinChanges()) {
                 log('syncAfterEditorReportedSaved: connector version did not catch up within',
-                    DIRECT_SAVE_SYNC_POLLS * DIRECT_SAVE_SYNC_POLL_MS, 'ms — autosave loop will retry.');
+                    DIRECT_SAVE_SYNC_POLLS * DIRECT_SAVE_SYNC_POLL_MS, 'ms - autosave loop will retry.');
             }
         } finally {
             endSaveCloseHold();
@@ -1291,6 +1298,7 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = kinPath;
+        blankDocumentUserEdited = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         if (session.info) {
             writeKinOnlyOfficeInfo(kinPath, session.info).catch(function(err) {
@@ -1310,6 +1318,7 @@ export function bootstrapOnlyOfficeApp(config) {
             reloadFromDisk: true
         });
         currentKinPath = null;
+        blankDocumentUserEdited = false;
         directLastPersistedVersion = Number(session && session.version ? session.version : 1);
         await openDirectEditor(session);
         // Fresh blank document: nothing to save yet. The footer stays "Saved"
@@ -1414,7 +1423,10 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'documentStateChange') {
             if (data.changed === true) {
-                if (kinSyncState !== 'saving' && kinSyncState !== 'error') {
+                if (!currentKinPath && !blankDocumentUserEdited) {
+                    // ONLYOFFICE can report an initial dirty state for a fresh
+                    // template before the user has typed. Do not nag on open.
+                } else if (kinSyncState !== 'saving' && kinSyncState !== 'error') {
                     setKinSyncState('dirty', currentKinPath || '');
                 }
                 scheduleDirectRefreshDebounce();
@@ -1428,6 +1440,12 @@ export function bootstrapOnlyOfficeApp(config) {
         }
         if (data.event === 'editorKeydown') {
             const key = String(data.key || '').toLowerCase();
+            if (key && key.length === 1 && !data.ctrlKey && !data.metaKey && !data.altKey) {
+                blankDocumentUserEdited = true;
+                if (!currentKinPath && kinSyncState !== 'saving' && kinSyncState !== 'error') {
+                    setKinSyncState('dirty', '');
+                }
+            }
             if ((data.ctrlKey || data.metaKey) && key === 's' && !currentKinPath) {
                 await promptDirectSaveAsForNewDocument('keyboard-save');
             }

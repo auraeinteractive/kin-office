@@ -24,7 +24,7 @@ SESSION_TTL_SECONDS = int(os.environ.get("DIRECT_SESSION_TTL_SECONDS", str(8 * 6
 MAX_UPLOAD_BYTES = int(os.environ.get("DIRECT_MAX_UPLOAD_BYTES", str(64 * 1024 * 1024)))
 EDITOR_HTML = Path(__file__).with_name("editor.html").read_text(encoding="utf-8")
 TEMPLATE_DIR = Path(os.environ.get("DIRECT_TEMPLATE_DIR", "/app/templates"))
-AUTOSAVE_INTERVAL_SECONDS = max(1, int(os.environ.get("DIRECT_AUTOSAVE_INTERVAL_SECONDS", "7")))
+AUTOSAVE_INTERVAL_SECONDS = max(5, int(os.environ.get("DIRECT_AUTOSAVE_INTERVAL_SECONDS", "20")))
 AUTOSAVE_IDLE_GRACE_SECONDS = max(5, int(os.environ.get("DIRECT_AUTOSAVE_IDLE_GRACE_SECONDS", "60")))
 CALLBACK_DOWNLOAD_MAX_ATTEMPTS = max(1, int(os.environ.get("DIRECT_CALLBACK_DOWNLOAD_RETRIES", "3")))
 CALLBACK_DOWNLOAD_RETRY_DELAY = float(os.environ.get("DIRECT_CALLBACK_DOWNLOAD_RETRY_DELAY", "0.5"))
@@ -582,6 +582,13 @@ def autosave_once():
     cutoff = now() - AUTOSAVE_IDLE_GRACE_SECONDS
     snapshot = list(SESSIONS.items())
     for sid, session in snapshot:
+        context = "session=%s path=%s version=%s synced=%s ds_error=%s" % (
+            sid,
+            session.get("file_path") or "",
+            session.get("version"),
+            session.get("last_synced_version"),
+            session.get("last_forcesave_error"),
+        )
         try:
             if session.get("last_seen", 0) < cutoff:
                 continue
@@ -599,37 +606,44 @@ def autosave_once():
             ds_error = parsed.get("error") if isinstance(parsed, dict) else None
             session["last_forcesave_at"] = now()
             session["last_forcesave_error"] = ds_error
+            context = "session=%s path=%s version=%s synced=%s ds_error=%s" % (
+                sid,
+                session.get("file_path") or "",
+                session.get("version"),
+                session.get("last_synced_version"),
+                ds_error,
+            )
             if ds_error == 0:
                 session["save_pending"] = True
                 print(
-                    "direct-connector: autosave forcesave accepted session=%s key=%s"
-                    % (sid, session["document_key"]),
+                    "direct-connector: autosave forcesave accepted %s key=%s"
+                    % (context, session["document_key"]),
                     flush=True,
                 )
             elif ds_error == 4:
-                session["dirty"] = False
+                print("direct-connector: autosave no changes %s" % context, flush=True)
             elif ds_error in (1,):
                 print(
-                    "direct-connector: autosave dropping unknown session=%s key=%s (DS error %s)"
-                    % (sid, session["document_key"], ds_error),
+                    "direct-connector: autosave dropping unknown %s key=%s"
+                    % (context, session["document_key"]),
                     flush=True,
                 )
             else:
                 print(
-                    "direct-connector: autosave forcesave rejected session=%s status=%s body=%s"
-                    % (sid, status, text[:200]),
+                    "direct-connector: autosave forcesave rejected %s status=%s body=%s"
+                    % (context, status, text[:200]),
                     flush=True,
                 )
         except (urllib.error.URLError, ConnectionError, TimeoutError) as transient:
             print(
-                "direct-connector: autosave transient error session=%s error=%s"
-                % (sid, transient),
+                "direct-connector: autosave transient error %s error=%s"
+                % (context, transient),
                 flush=True,
             )
         except Exception as error:
             print(
-                "direct-connector: autosave session=%s unexpected error=%s"
-                % (sid, error),
+                "direct-connector: autosave unexpected error %s error=%s"
+                % (context, error),
                 flush=True,
             )
 

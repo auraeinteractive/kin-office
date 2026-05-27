@@ -89,7 +89,7 @@ DS only fires its callback on close (status 2) or when forcesave is triggered (s
 
 | Env | Default | Purpose |
 |-----|---------|---------|
-| `DIRECT_AUTOSAVE_INTERVAL_SECONDS` | `7` | Period of the connector autosave thread |
+| `DIRECT_AUTOSAVE_INTERVAL_SECONDS` | `20` | Period of the connector autosave thread |
 | `DIRECT_AUTOSAVE_IDLE_GRACE_SECONDS` | `60` | Skip sessions whose `last_seen` is older than this |
 | `DIRECT_CALLBACK_DOWNLOAD_RETRIES` | `3` | Callback URL download attempts before giving up |
 
