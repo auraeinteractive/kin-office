@@ -1,8 +1,0 @@
-{
-  "id": "kinonlyoffice_spreadsheets",
-  "displayName": "OnlyOffice Spreadsheets",
-  "version": "12",
-  "entry": "main.js",
-  "category": "Office",
-  "published": true
-}

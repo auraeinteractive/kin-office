@@ -1,8 +1,0 @@
-{
-  "id": "kinonlyoffice_presentations",
-  "displayName": "OnlyOffice Presentations",
-  "version": "12",
-  "entry": "main.js",
-  "category": "Office",
-  "published": true
-}

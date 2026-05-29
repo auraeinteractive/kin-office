@@ -1,0 +1,8 @@
+{
+  "id": "kinoffice_slides",
+  "displayName": "Slides",
+  "version": "12",
+  "entry": "main.js",
+  "category": "Office",
+  "published": true
+}

@@ -1,6 +1,4 @@
 .config.ini
 build/
-nextcloud/
 .env
-docker-compose.kin-deploy-host.yml
 dist/

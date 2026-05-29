@@ -1,0 +1,8 @@
+{
+  "id": "kinoffice_sheets",
+  "displayName": "Sheets",
+  "version": "12",
+  "entry": "main.js",
+  "category": "Office",
+  "published": true
+}

@@ -1,7 +1,16 @@
+kin-office (1.2.0-1) stable; urgency=high
+
+  * BREAKING: Replace Document Server/direct connector runtime with
+    browser-only Kin Office assets and direct Kin file writes.
+  * Remove Docker, systemd wrapper, nginx /ds/ and /direct/ integration.
+  * Add pinned browser SDK vendor script and local editor iframe bridge.
+
+ -- Kin <packages@os-kin.com>  Thu, 28 May 2026 15:30:00 +0000
+
 kin-office (1.1.0-1) stable; urgency=high
 
-  * BREAKING: Remove Nextcloud, OIDC, and kin-bridge; OnlyOffice Direct + Kin FS only.
-  * docker-compose: onlyoffice + onlyoffice-direct; merged compose file.
+  * BREAKING: Remove Nextcloud, OIDC, and kin-bridge; direct Kin FS only.
+  * docker-compose: document editor services merged into one compose file.
   * deploy.sh: nginx /kin-office/ds/ and /direct/ only; drop occ/user_oidc.
   * office_app.js: strip WebDAV/bridge; adaptive autosave polling.
   * Remove kinnextcloud / kinnextcloud_mail apps; update specs and AGENTS.md.
@@ -11,7 +20,7 @@ kin-office (1.1.0-1) stable; urgency=high
 kin-office (1.0.9-1) stable; urgency=high
 
   * direct-connector: rewrite loopback Document Server save URLs to internal
-    onlyoffice (fixes callback download failures); only set save_pending when
+    document editor service (fixes callback download failures); only set save_pending when
     forcesave is accepted.
   * office apps: on editor "saved", force-save and sync to Kin when callback
     is slow; show Save failed dialog instead of silent log only.
@@ -21,8 +30,8 @@ kin-office (1.0.9-1) stable; urgency=high
 kin-office (1.0.8-1) stable; urgency=medium
 
   * kin-office-wrapper: docker compose up --build on start/restart so apt
-    upgrades refresh onlyoffice-direct without manual compose on the server.
-  * nginx: OnlyOffice service worker stub via internal location (nginx 1.24+
+    upgrades refresh editor services without manual compose on the server.
+  * nginx: document editor service worker stub via internal location (nginx 1.24+
     rejects default_type inside if).
 
  -- Kin <packages@os-kin.com>  Wed, 20 May 2026 22:30:00 +0000
@@ -69,7 +78,7 @@ kin-office (1.0.3-1) stable; urgency=medium
 kin-office (1.0.0-1) stable; urgency=low
 
   * Initial release.
-  * Nextcloud with OnlyOffice integration for Kin OS.
+  * Nextcloud with document editing integration for Kin OS.
   * Installs to /opt/kin/modules/kin-office/.
 
  -- Kin <packages@os-kin.com>  Wed, 29 Apr 2026 12:00:00 +0000

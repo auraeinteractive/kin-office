@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kin Office</title>
+    <style>
+        html,
+        body,
+        #editor {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: transparent;
+        }
+
+        #editor {
+            opacity: 1;
+            transition: opacity 160ms ease;
+        }
+
+        #editor.loading {
+            opacity: 0.5;
+        }
+
+        #status {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="status">Loading Kin Office editor...</div>
+    <div id="editor"></div>
+
+    <script src="vendor/kin-office/empty_bin.js"></script>
+    <script src="browser_editor_adapter.js"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        var ORIGIN = window.location.origin;
+        var editorEl = document.getElementById('editor');
+        var editor = null;
+
+        function setEditorLoading(loading) {
+            if (!editorEl) return;
+            editorEl.classList.toggle('loading', !!loading);
+        }
+
+        function post(message) {
+            try {
+                window.parent.postMessage(Object.assign({
+                    type: 'kinOfficeEditorEvent'
+                }, message || {}), ORIGIN);
+            } catch (_error) {
+                // ignore
+            }
+        }
+
+        function bytesFromBase64(base64) {
+            var binary = atob(String(base64 || ''));
+            var out = new Uint8Array(binary.length);
+            for (var i = 0; i < binary.length; i += 1) {
+                out[i] = binary.charCodeAt(i);
+            }
+            return out;
+        }
+
+        function bytesToBase64(bytes) {
+            var binary = '';
+            var chunk = 0x8000;
+            for (var i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        async function openDocument(data) {
+            if (!window.KinOfficeBrowser) {
+                throw new Error('Kin Office adapter did not load.');
+            }
+            setEditorLoading(true);
+            if (editor && typeof editor.destroy === 'function') {
+                editor.destroy();
+                editor = null;
+            }
+            editor = await window.KinOfficeBrowser.create({
+                containerId: 'editor',
+                fileName: data.fileName || 'Document.docx',
+                fileType: data.fileType || 'docx',
+                bytes: data.data_base64 ? bytesFromBase64(data.data_base64) : null,
+                isNew: !!data.isNew,
+                lang: data.lang || 'en',
+                onReady: function() {
+                    setEditorLoading(false);
+                    post({ event: 'ready' });
+                },
+                onDirty: function(changed) {
+                    post({ event: 'documentStateChange', changed: !!changed });
+                },
+                onSaveRequested: function() {
+                    post({ event: 'saveRequested' });
+                },
+                onError: function(error) {
+                    post({ event: 'error', error: error && error.message ? error.message : String(error) });
+                }
+            });
+        }
+
+        async function exportDocument(requestId) {
+            if (!editor || typeof editor.exportDocument !== 'function') {
+                throw new Error('No document is open.');
+            }
+            var result = await editor.exportDocument();
+            post({
+                event: 'exported',
+                requestId: requestId || '',
+                fileName: result.fileName || '',
+                fileType: result.fileType || '',
+                data_base64: bytesToBase64(result.bytes || new Uint8Array(0))
+            });
+        }
+
+        function processSaveResult(success, message) {
+            if (editor && typeof editor.processSaveResult === 'function') {
+                editor.processSaveResult(!!success, message || '');
+            }
+        }
+
+        window.addEventListener('message', function(event) {
+            if (event.origin !== ORIGIN) return;
+            var data = event.data || {};
+            if (data.type !== 'kinOfficeEditorCommand') return;
+
+            if (data.command === 'open') {
+                openDocument(data).catch(function(error) {
+                    setEditorLoading(false);
+                    post({ event: 'error', error: error && error.message ? error.message : String(error) });
+                });
+                return;
+            }
+
+            if (data.command === 'export') {
+                exportDocument(data.requestId).catch(function(error) {
+                    post({
+                        event: 'exportFailed',
+                        requestId: data.requestId || '',
+                        error: error && error.message ? error.message : String(error)
+                    });
+                });
+                return;
+            }
+
+            if (data.command === 'saveResult') {
+                processSaveResult(data.success !== false, data.message || '');
+            }
+        });
+
+        document.addEventListener('keydown', function(event) {
+            var key = event && event.key ? String(event.key).toLowerCase() : '';
+            if ((event.ctrlKey || event.metaKey) && key === 's') {
+                event.preventDefault();
+                event.stopPropagation();
+                post({ event: 'saveRequested' });
+                return;
+            }
+            post({
+                event: 'editorKeydown',
+                key: event && event.key ? String(event.key) : '',
+                ctrlKey: !!(event && event.ctrlKey),
+                metaKey: !!(event && event.metaKey),
+                shiftKey: !!(event && event.shiftKey),
+                altKey: !!(event && event.altKey)
+            });
+        }, true);
+
+        window.addEventListener('beforeunload', function() {
+            if (editor && typeof editor.destroy === 'function') {
+                editor.destroy();
+            }
+        });
+
+        post({ event: 'shellReady' });
+    }());
+    </script>
+</body>
+</html>

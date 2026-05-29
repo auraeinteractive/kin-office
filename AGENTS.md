@@ -1,69 +1,55 @@
-# Project: kin-office — OnlyOffice Direct for Kin
+# Project: kin-office — Kin Office for Kin
 
 ## Goal
 
-Run OnlyOffice Document Server in Docker and expose it through Kin nginx at `https://<host>/kin-office/`, with **direct Kin filesystem** integration (no Nextcloud, no OIDC).
+Run Kin Office editing directly in the browser with Euro-Office source-aligned web assets and direct Kin filesystem integration. There is **no Docker runtime, Document Server, direct connector, Nextcloud, or OIDC**.
 
 ## Important operational rules
 
-- **NEVER delete existing Docker volumes** unless the user explicitly authorizes it.
-- **DO NOT modify docker-compose.yml** to remove the `onlyoffice` service — it is the Document Server.
-- **deploy.sh** — Bootstrap: compose up, nginx `/ds/` + `/direct/`, DS safeUrls. Keep edits focused.
-- **Recreate containers only, not volumes** — `docker compose rm -f <service>` then `up -d`, never `docker compose down -v`.
-- **After container changes, reload Kin nginx** when using dev Kin build (`deploy.sh` reloads automatically when Kin nginx is running).
+- Do not reintroduce Docker, `/ds/`, `/direct/`, Document Server, or the old Python connector unless the user explicitly asks for a rollback.
+- Use `scripts/fetch-euro-office-browser-sdk.sh` to refresh Euro-Office source snapshots and generated Kin Office browser assets; do not hand-edit downloaded vendor files.
+- Keep Kin file persistence in `office_app.js`: read via `GET /file/{volume}/…`, save via `write_binary` or chunked upload, then read back to verify.
+- `deploy.sh` installs Kin apps/static assets only. `make-debian.sh` packages apps/assets only and must not depend on Docker.
+- Kin Office must run inside Kin. Do **not** start standalone static servers or browser-smoke-test `kinoffice_common` outside Kin; that cannot validate Kin APIs, file dialogs, app windows, save, autosave, or load behavior.
 - **Never hardcode hostnames** — use `window.location.origin`, `/etc/kin/config.ini` `[KinCore] hostname=`, `.config.ini`, or `X-Forwarded-*` headers.
 
 ## Architecture
 
 ```
-Kin workspace (kinonlyoffice_* apps)
+Kin workspace (kinoffice_* apps)
         |
         +-- /api/file/*  (read/write Kin paths)
         |
-        +-- iframe --> /kin-office/direct/editor
+        +-- iframe --> kinoffice_common/browser_editor.html
                           |
-                          v
-                   direct-connector (sessions, callback)
-                          |
-                          v
-                   OnlyOffice DS (/kin-office/ds/)
+                          +-- Euro-Office web-apps/sdkjs
+                          +-- x2t assets
 ```
 
 ## Components
 
-### Docker
-
-- `docker-compose.yml` — `onlyoffice` + `onlyoffice-direct`
-- `direct-connector/` — `server.py` (download/callback protocol), `editor.html`
-
 ### Kin apps
 
-- `repository/Applications/Office/kinonlyoffice_documents/`
-- `repository/Applications/Office/kinonlyoffice_spreadsheets/`
-- `repository/Applications/Office/kinonlyoffice_presentations/`
-- `repository/Applications/Office/kinonlyoffice_common/office_app.js`
+- `repository/Applications/Office/kinoffice_docs/` (`Docs`)
+- `repository/Applications/Office/kinoffice_sheets/` (`Sheets`)
+- `repository/Applications/Office/kinoffice_slides/` (`Slides`)
+- `repository/Applications/Office/kinoffice_common/office_app.js`
+- `repository/Applications/Office/kinoffice_common/browser_editor.html`
+- `repository/Applications/Office/kinoffice_common/browser_editor_adapter.js`
+- `repository/Applications/Office/kinoffice_common/vendor/kin-office/`
 
 Each app uses `manifest.json` → `main.js` → `kin.classes.Window` + `app.js` (see Kin `docs/how_to_write_kinapp.md`).
 
 ### Deploy
 
-- `deploy.sh` — dev: `.config.ini` + Kin build nginx module; `--deploy-mode`: `/etc/kin/config.ini` + `/etc/nginx/kin-modules/`
-- `kin-office-wrapper.sh` / `kin-office.service` — packaged start
-
-## Direct connector API (summary)
-
-| Endpoint | Purpose |
-|----------|---------|
-| `POST /direct/api/session` | Create/join session (optional `data_base64`, `path`) |
-| `GET /direct/api/session/{id}/config` | Editor + DS config |
-| `POST /direct/callback/{id}` | Document Server save callback |
-| `GET /direct/download/{id}/…` | Document bytes for DS |
-
-Kin apps persist to Kin after callback via `syncDirectAutosaveToKin` / `saveDirectSessionToKinPath` in `office_app.js`.
+- `deploy.sh` — dev: `.config.ini` + Kin build path; `--deploy-mode`: installs to `/usr/lib/kin/repository/Applications`
+- `make-debian.sh` — package apps, docs, scripts, and vendored browser assets
+- `scripts/fetch-euro-office-browser-sdk.sh` — pinned Euro-Office source/artifact fetcher
+- `scripts/patch-euro-office-save-hooks.py` — save handler patch applied before generated assets are used
 
 ## Kin file I/O (save path)
 
-OnlyOffice **saved** in the UI is not the same as written to `Home:`. Persistence is two hops: DS → connector callback (in-memory `version++`), then the Kin app writes disk.
+Editor state is not the same as written to `Home:`. Persistence is explicit: the Kin app requests an editor export, writes returned bytes to Kin, and verifies by reading the path back.
 
 | Size | API | Payload |
 |------|-----|---------|
@@ -71,21 +57,21 @@ OnlyOffice **saved** in the UI is not the same as written to `Home:`. Persistenc
 | ≥ 16 KiB | `upload_begin` / `upload_chunk` / `upload_finish` | Raw bytes per chunk |
 
 - **Open:** `GET /file/{volume}/…` (binary route from Kin path).
-- **Sidecar:** `POST /api/file/write` with text body for `Home:file.docx.info` (session rejoin metadata).
+- **Editor:** iframe `browser_editor.html` receives bytes and returns exported bytes via `postMessage`.
+- **Sidecar:** `POST /api/file/write` with text body for `Home:file.docx.info`.
 - **Guards:** `validateOfficeBytes` (ZIP header, anti–blank-template); readback length check after write.
 
-If saves appear lost: check connector callbacks (`journalctl -u kin-office | grep direct-connector`), confirm File → Save As set a `Home:` path, and see [specs/architecture.md](specs/architecture.md).
+If saves appear lost: check browser console for export/write/readback errors, confirm File → Save As set a `Home:` path, and see [specs/architecture.md](specs/architecture.md).
 
 ## Commands
 
 ```bash
-docker compose up -d --build
+./scripts/fetch-euro-office-browser-sdk.sh
 ./deploy.sh                    # dev: needs .config.ini KIN_BUILD_PATH
-./deploy.sh --deploy-mode      # production paths
+sudo ./deploy.sh --deploy-mode # production paths
 ./build-apps.sh
 
 sudo apt install ./dist/kin-office_*.deb
-sudo systemctl restart kin-office
 ```
 
 ## Configuration
@@ -97,7 +83,7 @@ KIN_BUILD_PATH=/path/to/kin/build
 KIN_PUBLIC_HOST=10.0.0.1
 ```
 
-**Packaged** — `[KinCore] hostname=` in `/etc/kin/config.ini`; `deploy.sh --deploy-mode` writes nginx module.
+**Packaged** — `deploy.sh --deploy-mode` copies apps into the runtime Kin repository. No service is installed.
 
 ## Kin OS
 
@@ -107,8 +93,8 @@ Kin repo: `../kin/` (read-only unless asked).
 
 - [specs/README.md](specs/README.md)
 - [specs/architecture.md](specs/architecture.md)
-- [specs/wbs/01-onlyoffice-direct-kinfs.md](specs/wbs/01-onlyoffice-direct-kinfs.md)
+- [specs/wbs/01-kinoffice-kinfs.md](specs/wbs/01-kinoffice-kinfs.md)
 
 ## Legacy data
 
-Older installs may still have a `nextcloud_data` Docker volume. Compose no longer references it; remove manually if desired: `docker volume rm <project>_nextcloud_data`.
+Older installs may still have Docker volumes or a `kin-office.service` from previous Document Server builds. This branch no longer references them; remove manually only if desired.

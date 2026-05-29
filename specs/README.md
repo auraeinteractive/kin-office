@@ -1,20 +1,21 @@
-# kin-office specifications
+# Kin Office Specifications
 
-kin-office provides **OnlyOffice Document Server** and a **direct connector** for Kin workspace apps. Files live on Kin volumes (`Home:`, etc.); there is no Nextcloud stack.
+Kin Office provides browser-only document editing for Kin workspace apps using Euro-Office source-aligned components. Files live on Kin volumes (`Home:`, etc.); there is no Nextcloud, WebDAV bridge, Docker runtime, or Document Server.
 
 ## Components
 
 | Piece | Role |
 |-------|------|
-| `onlyoffice` (Docker) | Document Server at host `:5003`, proxied as `/kin-office/ds/` |
-| `onlyoffice-direct` (Docker) | Python connector: sessions, download/callback URLs for DS |
-| `kinonlyoffice_*` apps | Kin launchers; editor via `/kin-office/direct/`; disk via `write_binary` / upload |
+| `kinoffice_docs`, `kinoffice_sheets`, `kinoffice_slides` | Kin launchers; disk via `GET /file`, `write_binary`, and upload APIs |
+| `browser_editor.html` | Same-origin iframe shell that hosts the local editor |
+| `vendor/kin-office/` | Euro-Office source snapshots, generated browser assets, blank templates, and x2t assets |
+| `scripts/fetch-euro-office-browser-sdk.sh` | Reproducible source/artifact fetch script |
 
 ## Docs
 
 - [Architecture](architecture.md)
-- [WBS: KinFS + direct editor](wbs/01-onlyoffice-direct-kinfs.md)
+- [WBS: KinFS + browser-local editor](wbs/01-kinoffice-kinfs.md)
 
 ## Deploy
 
-See [AGENTS.md](../AGENTS.md) and `deploy.sh` / `kin-office.service`.
+See [AGENTS.md](../AGENTS.md), `deploy.sh`, and `make-debian.sh`.

@@ -53,26 +53,26 @@ install_to_kin() {
         echo "Error: Kin repository directory not found at $KIN_BUILD_PATH/repository/Applications or applications"
         return
     fi
+
+    OFFICE_SRC="$SOURCE_DIR/Office"
+    OFFICE_DEST="$KIN_REPO_DIR/Office"
+    if [ ! -d "$OFFICE_SRC" ]; then
+        echo "Error: Kin Office apps not found at $OFFICE_SRC"
+        return 1
+    fi
     
-    echo "Source: $SOURCE_DIR"
-    echo "Destination: $KIN_REPO_DIR"
-    echo "Files in source:"
-    ls -laR "$SOURCE_DIR/"
-    echo "Checking destination:"
-    ls -la "$KIN_REPO_DIR/Internet/"
-    ls -la "$KIN_REPO_DIR/Office/"
-    echo "Copying files with verbose rsync..."
-    rsync -av "$SOURCE_DIR/" "$KIN_REPO_DIR/"
+    echo "Source: $OFFICE_SRC"
+    echo "Destination: $OFFICE_DEST"
+    mkdir -p "$OFFICE_DEST"
+    rsync -av "$OFFICE_SRC/" "$OFFICE_DEST/"
     echo "Apps installed to Kin build."
-    # `kinonlyoffice_*` are real package ids in this tree. The Kin repo workspace must not
-    # rewrite them to `remote_onlyoffice` in clients/workspace/scripts/base.js:normalizeRepoPackageId
-    # or the app menu will open the wrong package after rsync.
+    # Only sync Office/ — never rsync the whole Applications tree or Kin core apps disappear.
 }
 
 load_config
 
 echo ""
-echo "=== Kin OnlyOffice Apps Build Script ==="
+echo "=== Kin Office Apps Build Script ==="
 echo ""
 
 if [ -z "$KIN_BUILD_PATH" ]; then

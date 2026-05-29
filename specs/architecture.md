@@ -1,113 +1,82 @@
-# kin-office architecture (OnlyOffice Direct)
+# Kin Office Architecture
 
 ```mermaid
 flowchart LR
   subgraph kin [Kin workspace]
-    App[kinonlyoffice apps]
+    App[Kin Office apps]
     KinFS["Kin file APIs"]
   end
-  subgraph nginx [Kin nginx prefix]
-    DS["/ds/ to Document Server"]
-    Direct["/direct/ to connector"]
+  subgraph browser [Browser]
+    Shell["browser_editor.html"]
+    EO["Euro-Office web-apps and sdkjs"]
+    X2T["Euro-Office aligned x2t assets"]
   end
-  subgraph docker [Docker]
-    OO[onlyoffice]
-    Conn[onlyoffice-direct]
-  end
-  App -->|session + Kin bytes| Direct
-  App -->|persist saves| KinFS
-  App -->|iframe editor| Direct
-  Conn -->|config callbackUrl| OO
-  OO -->|GET download POST callback| Conn
+  App -->|GET /file/volume/path| KinFS
+  App -->|iframe + postMessage bytes| Shell
+  Shell --> EO
+  Shell --> X2T
+  Shell -->|export Uint8Array| App
+  App -->|write_binary or upload| KinFS
 ```
 
-## Why the direct connector exists
+## Why there is no connector
 
-OnlyOffice Document Server requires:
+The old integration used a document server plus a Python connector because the official server flow expects a server-side editing service, download URL, and callback URL.
 
-1. A **download URL** for the document bytes when editing starts.
-2. A **callback URL** when the user saves or autosaves (server-to-server).
+This branch removes that runtime. Kin apps now load a browser-local editor iframe and pass document bytes with `postMessage`. The iframe loads Euro-Office source-aligned browser assets and returns exported bytes to the Kin app, which writes them directly through Kin's existing browser-session file APIs.
 
-Kin file APIs are **browser-session** scoped. The connector holds edit-session bytes in memory and implements the DS protocol; Kin apps copy saved content back to the Kin path (and optional `.info` sidecar for session rejoin).
+## Asset provenance
 
-The editor showing **saved** only means the Document Server finished a save cycle. Bytes land on `Home:…` only after hop 2 below succeeds.
+- `scripts/fetch-euro-office-browser-sdk.sh` fetches pinned `Euro-Office/sdkjs`, `Euro-Office/web-apps`, and `Euro-Office/core` snapshots.
+- Generated runtime assets live under `repository/Applications/Office/kinoffice_common/vendor/kin-office/packages/kin-office/`.
+- `empty_bin.js` provides local blank document templates.
+- `manifest.json` in the vendor directory records source repositories and commits.
 
-## Callback URLs
+## Kin file I/O
 
-| Variable | Typical value | Consumer |
-|----------|---------------|----------|
-| `DIRECT_DOCUMENT_BASE_URL` | `http://onlyoffice-direct:8000/direct` | Document Server inside Docker |
-| `DOCUMENT_SERVER_INTERNAL_URL` | `http://onlyoffice/` | Connector fetching saved file from DS |
-| `DOCUMENT_SERVER_PUBLIC_URL` | `/kin-office/ds/` | Browser-loaded DS API script |
-
-Public editor URLs use Kin nginx `X-Forwarded-*` headers when `DIRECT_PUBLIC_BASE_URL` is unset.
-
-## Kin file I/O (browser → Kin HTTP)
-
-Implemented in `kinonlyoffice_common/office_app.js`.
+Implemented in `repository/Applications/Office/kinoffice_common/office_app.js`.
 
 | Operation | API | Notes |
 |-----------|-----|--------|
 | Open (read bytes) | `GET /file/{volume}/…` | Cache-busted query param; not `/api/file/read` for binary |
 | Save (small/medium) | `POST /api/file/write_binary` | JSON `{ path, data_base64 }` — direct write to target path |
 | Save (large, ≥ 16 KiB) | `upload_begin` → `upload_chunk` → `upload_finish` | Raw octet-stream chunks |
-| Sidecar metadata | `POST /api/file/write` | Text JSON in `Home:file.docx.info` (`kinOnlyOffice.sessionId`) |
+| Sidecar metadata | `POST /api/file/write` | Text JSON in `Home:file.docx.info` |
 
 After write, the app readbacks the same path and checks length + OOXML ZIP header guards (`validateOfficeBytes`).
 
-## Save pipeline (two hops)
+## Save pipeline
 
 ```mermaid
 sequenceDiagram
-  participant Editor as OnlyOffice_editor
-  participant DS as Document_Server
-  participant Conn as direct_connector
   participant App as office_app.js
+  participant Editor as browser_editor
   participant Kin as Kin_HTTP
 
-  Editor->>DS: edit
-  DS->>Conn: POST callback status 2 or 6
-  Conn->>Conn: SESSIONS content version++
-
-  App->>Conn: GET session state or content
-  Conn-->>App: data_base64
+  App->>Kin: GET /file/volume/path
+  Kin-->>App: document bytes
+  App->>Editor: postMessage open bytes
+  Editor->>Editor: edit locally
+  App->>Editor: postMessage export request
+  Editor-->>App: exported bytes
   App->>Kin: POST write_binary or upload
 ```
 
-1. **Open:** `readKinFileBytes` → `POST /kin-office/direct/api/session` with `data_base64`, `reloadFromDisk: true`.
-2. **Edit:** iframe `/kin-office/direct/editor?session=…`.
-3. **Persist:** On Ctrl+S, OnlyOffice toolbar Save, Kin File → Save, or close drain:
-   - `ensureDirectSessionFlushed()` (force-save if needed; wait for connector `version` bump)
-   - `fetchDirectContent()` → `GET …/session/{id}/content`
-   - `writeKinFileBytesSafe(path, bytes)` → `write_binary` or chunked upload
+1. **Open:** `readKinFileBytes` reads an existing Kin path, or `browser_editor.html` uses a local blank template for a new file.
+2. **Edit:** `browser_editor_adapter.js` loads Kin Office assets and sends bytes into the editor with `asc_openDocument`.
+3. **Persist:** On Ctrl+S, File → Save, Save As, or the editor save button, `office_app.js` requests export and writes the returned bytes with `writeKinFileBytesSafe`.
 
-Autosave is disabled. Ctrl+S and explicit save actions remain enabled.
+Autosave is disabled. Ctrl+S and explicit save actions remain the persistence boundary for Kin storage.
 
 ## Save policy
 
-DS only fires its callback on close (status 2) or when forcesave is triggered (status 6). Its internal "All changes saved" text reflects DS's own editor state, not Kin storage. The integration therefore does not present DS autosave as a Kin save. Background autosave is off; the connector only force-saves for explicit Save / Ctrl+S / close-drain paths.
+The editor state is not treated as a Kin save. Kin persistence is intentionally limited to explicit save requests that export editor bytes, write them through the Kin file API, and verify the readback length.
 
-| Env | Default | Purpose |
-|-----|---------|---------|
-| `DIRECT_CALLBACK_DOWNLOAD_RETRIES` | `3` | Callback URL download attempts before giving up |
+## Troubleshooting
 
-Status callback download is retried with a 500 ms backoff to ride out the few-hundred-ms window where DS sometimes returns 502 while finalizing.
+1. Editor does not load — check that `vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js` exists.
+2. New document fails — check that `vendor/kin-office/empty_bin.js` exists and defines `window.KinOfficeEmptyBin`.
+3. Save fails — check browser console for export errors, Kin `write_binary` / upload errors, or readback mismatch.
+4. No Kin path — new document without Save As has no `currentKinPath`; Save should prompt for a path.
 
-## Honest sync indicator (client)
-
-`office_app.js` tracks `kinSyncState ∈ { idle, saved, dirty, saving, error }`. It drives:
-
-- **Window title suffix** via `kin.classes.Window.setTitle` only when close is blocked.
-- **Footer pill** (top-right of the app shell, above the iframe) only while something is happening or just happened. It fades after successful saves.
-- **Dim close overlay** only when the user has actually pressed close and the gate is blocking it. Carries a spinner, the reason text, and a "Save now" button.
-
-A "Saved" UX claim is only made after `writeKinFileBytesSafe` + readback succeeds.
-
-## Troubleshooting "saved but file unchanged"
-
-1. Ctrl+S works but reopening is stale — check browser console for `writeKinFileBytes` and connector callback logs.
-2. Callback download failing — look for `direct-connector: fetch_url attempt N/3 failed`. DS → `onlyoffice-direct:8000` reachability or DS save errors.
-3. No Kin path — new document without Save As has no `currentKinPath`; Save should prompt for a path.
-4. Connector `version` did not advance after explicit Save — DS did not send a status 6 callback; inspect `journalctl -u kin-office | grep direct-connector`.
-
-See [wbs/01-onlyoffice-direct-kinfs.md](wbs/01-onlyoffice-direct-kinfs.md) for acceptance tests.
+See [wbs/01-kinoffice-kinfs.md](wbs/01-kinoffice-kinfs.md) for acceptance tests.

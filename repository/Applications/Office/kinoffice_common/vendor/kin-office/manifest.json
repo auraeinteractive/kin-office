@@ -1,0 +1,14 @@
+{
+  "generatedBy": "scripts/fetch-euro-office-browser-sdk.sh",
+  "sdkjsRepo": "https://github.com/Euro-Office/sdkjs",
+  "sdkjsRef": "bf4a2db383f2dc9712c328e8704d3c58abb6a93e",
+  "webAppsRepo": "https://github.com/Euro-Office/web-apps",
+  "webAppsRef": "7cc3e23c2a881b7b3fe58e270f91b6926ec50e92",
+  "coreRepo": "https://github.com/Euro-Office/core",
+  "coreRef": "ab710975ac3e5b7f5ea4eea53207ec58e5c869ed",
+  "notes": [
+    "Euro-Office source snapshots are pinned from DocumentServer submodules.",
+    "Runtime packages are stored under packages/kin-office.",
+    "Upstream license and attribution files are preserved where present."
+  ]
+}

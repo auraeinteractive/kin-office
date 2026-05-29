@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build kin-office_<version>_<arch>.deb into dist/
-# Installs to /opt/kin/modules/kin-office/ with deploy.sh in PATH
+# Installs browser-only kin-office apps and static editor assets.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
@@ -42,19 +42,14 @@ trap cleanup EXIT
 MODULE_DIR="$STAGE/opt/kin/modules/kin-office"
 mkdir -p "$MODULE_DIR"
 
-# Copy all needed files
-cp -a "$ROOT/docker-compose.yml" "$MODULE_DIR/"
 cp -a "$ROOT/deploy.sh" "$MODULE_DIR/"
 cp -a "$ROOT/build-apps.sh" "$MODULE_DIR/"
 chmod 755 "$MODULE_DIR/deploy.sh" "$MODULE_DIR/build-apps.sh"
 
-# Copy nginx/ directory
-cp -a "$ROOT/nginx" "$MODULE_DIR/"
-
-# Copy direct connector used by direct OnlyOffice launchers
-if [[ -d "$ROOT/direct-connector" ]]; then
-	cp -a "$ROOT/direct-connector" "$MODULE_DIR/"
-	rm -rf "$MODULE_DIR/direct-connector/__pycache__"
+# Copy helper scripts used to vendor Kin Office browser assets.
+if [[ -d "$ROOT/scripts" ]]; then
+	cp -a "$ROOT/scripts" "$MODULE_DIR/"
+	find "$MODULE_DIR/scripts" -type f -name "*.sh" -exec chmod 755 {} +
 fi
 
 # Copy repository/ (Kin apps)
@@ -68,14 +63,6 @@ fi
 # Copy config example
 if [[ -f "$ROOT/.env.example" ]]; then
 	cp "$ROOT/.env.example" "$MODULE_DIR/config.example"
-fi
-
-# Copy systemd service file and wrapper
-mkdir -p "$STAGE/lib/systemd/system"
-cp "$ROOT/kin-office.service" "$STAGE/lib/systemd/system/"
-if [[ -f "$ROOT/kin-office-wrapper.sh" ]]; then
-    cp "$ROOT/kin-office-wrapper.sh" "$MODULE_DIR/"
-    chmod 755 "$MODULE_DIR/kin-office-wrapper.sh"
 fi
 
 # Create /opt/kin/modules/ directory in postinst
@@ -95,48 +82,19 @@ mkdir -p /opt/kin/modules
 chown kin:kin /opt/kin/modules 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/deploy.sh 2>/dev/null || true
 chmod 755 /opt/kin/modules/kin-office/build-apps.sh 2>/dev/null || true
-chmod 755 /opt/kin/modules/kin-office/kin-office-wrapper.sh 2>/dev/null || true
 # Install Kin apps into the runtime repository used by deployed Kin.
 if [ -d /opt/kin/modules/kin-office/repository/Applications ]; then
     mkdir -p /usr/lib/kin/repository/Applications
     cp -a /opt/kin/modules/kin-office/repository/Applications/. /usr/lib/kin/repository/Applications/
 fi
-# Copy service file to correct location and reload systemd
-if [ -f /lib/systemd/system/kin-office.service ]; then
-    cp /lib/systemd/system/kin-office.service /etc/systemd/system/kin-office.service 2>/dev/null || true
-fi
-
-if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
-    systemctl daemon-reload 2>/dev/null || true
-    systemctl enable kin-office.service 2>/dev/null || true
-    # First install and upgrades: run the unit so kin-office-wrapper + deploy.sh apply nginx + OnlyOffice Direct.
-    # Do not fail apt if Docker is not ready yet (admin can: sudo systemctl start kin-office).
-    set +e
-    if systemctl is-active --quiet kin-office.service 2>/dev/null; then
-        systemctl restart kin-office.service
-        rc=$?
-    else
-        systemctl start kin-office.service
-        rc=$?
-    fi
-    set -e
-    if [ "$rc" != 0 ]; then
-        echo "kin-office: systemctl returned $rc (often Docker not running). When ready: sudo systemctl start kin-office" >&2
-    fi
-else
-    echo "kin-office: systemd not available; start manually after boot: sudo systemctl start kin-office" >&2
-fi
+echo "kin-office: installed browser-only apps; no service or Docker containers are required"
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
 
 cat >"$STAGE/DEBIAN/prerm" <<'PRERM'
 #!/bin/bash
 set -e
-# Stop and disable service before removal
-if [ -f /etc/systemd/system/kin-office.service ]; then
-    systemctl stop kin-office.service 2>/dev/null || true
-    systemctl disable kin-office.service 2>/dev/null || true
-fi
+exit 0
 PRERM
 chmod 755 "$STAGE/DEBIAN/prerm"
 
@@ -152,15 +110,15 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Kin <packages@os-kin.com>
 Installed-Size: $SIZE
-Depends: docker.io (>= 20.10) | docker-ce (>= 20.10), kin (>= 2.0)
-Recommends: fonts-maven-pro, nginx
-Description: Kin Office Module - OnlyOffice Direct for Kin OS
- OnlyOffice Document Server with direct Kin filesystem integration.
- Installs to /opt/kin/modules/kin-office/ and integrates with Kin nginx
- at /kin-office/ds/ and /kin-office/direct/.
+Depends: kin (>= 2.0)
+Recommends: fonts-maven-pro
+Description: Kin Office Module - browser-only office editing for Kin OS
+ Browser-only Kin Office integration with direct Kin filesystem access.
+ Installs to /opt/kin/modules/kin-office/ and copies Kin workspace apps
+ into /usr/lib/kin/repository/Applications.
  .
- Includes docker-compose (Document Server + direct connector) and Kin
- workspace apps for editing docx/xlsx/pptx on Home: and other volumes.
+ Includes static browser editor assets and Kin workspace apps for editing
+ docx/xlsx/pptx on Home: and other volumes without Docker.
 EOF
 
 mkdir -p "$ROOT/dist"
