@@ -1,7 +1,7 @@
 {
   "id": "kinoffice_common",
   "displayName": "Kin Office Common",
-  "version": "12",
+  "version": "13",
   "entry": "browser_editor.html",
   "category": "Office",
   "published": false

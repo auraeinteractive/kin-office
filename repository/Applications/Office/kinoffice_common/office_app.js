@@ -15,13 +15,6 @@ function kinPathBaseName(path) {
     return parts.length ? parts[parts.length - 1] : '';
 }
 
-function kinPathToFileRoute(path) {
-    const parsed = parseKinPath(path);
-    if (!parsed) return null;
-    const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
-    return segs.length ? '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/') : null;
-}
-
 function fileTypeFromName(name, fallback) {
     const match = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
     if (match && (match[1] === 'docx' || match[1] === 'xlsx' || match[1] === 'pptx')) return match[1];
@@ -33,7 +26,11 @@ function requestId(prefix) {
 }
 
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
-const KIN_AUTOSAVE_DELAY_MS = 5000;
+const OFFICE_MIME_TYPES = {
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+};
 
 function isZipLocalHeader(bytes) {
     return bytes && bytes.length >= 4 &&
@@ -81,6 +78,27 @@ function ensureKinOfficeIframeShell() {
     return iframe;
 }
 
+async function kinOfficeCommand(args) {
+    const response = await fetch('/api/commands/kinoffice', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams(args || {}).toString()
+    });
+    const text = await response.text();
+    let json = null;
+    if (text) {
+        try { json = JSON.parse(text); } catch (_error) { json = null; }
+    }
+    if (!response.ok) {
+        throw new Error((json && json.message) ? String(json.message) : 'HTTP ' + response.status);
+    }
+    if (!json || json.response !== 'success') {
+        throw new Error((json && json.message) ? String(json.message) : 'Kin Office command failed');
+    }
+    return json;
+}
+
 export function bootstrapKinOfficeApp(config) {
     const appConfig = Object.assign({
         appTag: 'kinoffice',
@@ -92,7 +110,8 @@ export function bootstrapKinOfficeApp(config) {
 
     const iframeEl = ensureKinOfficeIframeShell();
     const ORIGIN = window.location.origin;
-    const LOCAL_EDITOR_URL = new URL('./browser_editor.html', import.meta.url).href;
+    const KIN_OFFICE_BUILD_ID = '20260603-cache10';
+    const LOCAL_EDITOR_URL = new URL('./browser_editor.html?kinOfficeBuild=' + KIN_OFFICE_BUILD_ID, import.meta.url).href;
     const params = new URLSearchParams(window.location.search);
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
     const instanceId = getInstanceId();
@@ -111,20 +130,19 @@ export function bootstrapKinOfficeApp(config) {
     let shellReadyPromise = null;
     let pendingOpen = null;
     let currentDirty = false;
-    let dirtyGeneration = 0;
-    let autosaveTimer = null;
+    let currentSession = null;
     const pendingExports = new Map();
 
     function log() {
         console.log.apply(console, ['[' + appConfig.appTag + ']'].concat(Array.prototype.slice.call(arguments)));
     }
 
+    log('bootstrap', KIN_OFFICE_BUILD_ID, window.location.href);
+
     function postToParent(message) {
         try {
             window.parent.postMessage(message, ORIGIN);
-        } catch (_error) {
-            // ignore
-        }
+        } catch (_error) {}
     }
 
     function postToEditor(message) {
@@ -134,14 +152,26 @@ export function bootstrapKinOfficeApp(config) {
 
     function sendSaveResult(success, message) {
         try {
-            postToEditor({
-                command: 'saveResult',
-                success: success !== false,
-                message: message || ''
-            });
-        } catch (_error) {
-            // The save already reached Kin; editor UI feedback is best-effort.
+            postToEditor({ command: 'saveResult', success: success !== false, message: message || '' });
+        } catch (_error) {}
+    }
+
+    function createDocumentSession(options) {
+        const opts = options || {};
+        const fileType = opts.fileType || fileTypeFromName(opts.fileName, appConfig.fileType);
+        const bytes = opts.bytes || null;
+        if (bytes) {
+            validateOfficeBytes(opts.bytes);
         }
+        if (!opts.isNew && !bytes) throw new Error('No document bytes were available for Kin Office.');
+        return {
+            id: requestId('session'),
+            kinPath: opts.kinPath || null,
+            fileName: opts.fileName || appConfig.defaultFilename,
+            fileType,
+            isNew: !!opts.isNew,
+            bytes
+        };
     }
 
     function registerMenus() {
@@ -174,14 +204,13 @@ export function bootstrapKinOfficeApp(config) {
                 resolve(String(data.path || ''));
             }
             window.addEventListener('message', onMsg);
-            const preferredExt = String(opts.preferredExtension || appConfig.fileType || '').replace(/^\./, '');
             postToParent({
                 kinOpenFileDialog: true,
                 requestId: reqId,
                 mode: opts.mode === 'save' ? 'save' : 'load',
                 initialPath: opts.initialPath || dialogInitialPath,
                 defaultFilename: opts.defaultFilename || '',
-                preferredExtension: preferredExt
+                preferredExtension: String(opts.preferredExtension || appConfig.fileType || '').replace(/^\./, '')
             });
         });
     }
@@ -205,50 +234,49 @@ export function bootstrapKinOfficeApp(config) {
         });
     }
 
-    async function apiPostJson(path, payload) {
-        const response = await fetch(path, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            body: JSON.stringify(payload || {})
-        });
-        const text = await response.text();
-        let json = null;
-        if (text) {
-            try { json = JSON.parse(text); } catch (_error) { json = null; }
-        }
-        if (!response.ok) throw new Error((json && json.message) ? String(json.message) : 'HTTP ' + response.status);
-        return json || {};
-    }
-
     async function readKinFileBytes(kinPath) {
-        const route = kinPathToFileRoute(kinPath);
-        if (!route) throw new Error('Open from this volume is not supported yet: ' + kinPath);
-        const separator = route.indexOf('?') === -1 ? '?' : '&';
-        const response = await fetch(route + separator + '_kin_ts=' + Date.now(), {
+        log('readKinFileBytes:start', kinPath);
+        const parsed = parseKinPath(kinPath);
+        if (!parsed) throw new Error('Open from this volume is not supported yet: ' + kinPath);
+        const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
+        const route = '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/');
+        const response = await fetch(route + '?_kin_ts=' + Date.now(), {
             method: 'GET',
             credentials: 'same-origin',
             cache: 'no-store',
             headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
         });
         if (!response.ok) throw new Error('Could not read Kin file (HTTP ' + response.status + ')');
-        return new Uint8Array(await response.arrayBuffer());
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        log('readKinFileBytes:done', kinPath, bytes.length);
+        return bytes;
+    }
+
+    function kinFileUrlForPath(kinPath) {
+        const parsed = parseKinPath(kinPath);
+        if (!parsed) throw new Error('Open from this volume is not supported yet: ' + kinPath);
+        const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
+        return '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/') + '?_kin_ts=' + Date.now();
     }
 
     async function uploadKinFileBytes(kinPath, bytes) {
-        let uploadId = null;
-        try {
-            const begin = await apiPostJson('/api/file/upload_begin', {
+        const begin = await fetch('/api/file/upload_begin', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
                 path: kinPath,
                 name: kinPathBaseName(kinPath) || 'file.bin',
                 size: bytes.length
-            });
-            if (!begin || begin.response !== 'success' || !begin.upload_id) {
-                throw new Error((begin && begin.message) ? String(begin.message) : 'Upload begin failed');
-            }
-            uploadId = begin.upload_id;
-            const chunkSize = Math.max(256 * 1024, Math.min(begin.chunk_size || (8 * 1024 * 1024), 16 * 1024 * 1024));
-            let offset = Number(begin.offset || 0);
+            })
+        }).then(function(r) { return r.json(); });
+        if (!begin || begin.response !== 'success' || !begin.upload_id) {
+            throw new Error((begin && begin.message) ? String(begin.message) : 'Upload begin failed');
+        }
+        const uploadId = begin.upload_id;
+        const chunkSize = Math.max(256 * 1024, Math.min(begin.chunk_size || (8 * 1024 * 1024), 16 * 1024 * 1024));
+        let offset = Number(begin.offset || 0);
+        try {
             while (offset < bytes.length) {
                 const end = Math.min(offset + chunkSize, bytes.length);
                 const response = await fetch(
@@ -266,27 +294,40 @@ export function bootstrapKinOfficeApp(config) {
                 }
                 offset = Number(json.offset != null ? json.offset : end);
             }
-            const finish = await apiPostJson('/api/file/upload_finish', { upload_id: uploadId });
-            uploadId = null;
-            return finish;
-        } finally {
-            if (uploadId) {
-                fetch('/api/file/upload_abort', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ upload_id: uploadId })
-                }).catch(function() {});
+            const finish = await fetch('/api/file/upload_finish', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+                body: JSON.stringify({ upload_id: uploadId })
+            }).then(function(r) { return r.json(); });
+            if (!finish || finish.response !== 'success') {
+                throw new Error((finish && finish.message) ? String(finish.message) : 'Upload finish failed');
             }
+        } catch (error) {
+            fetch('/api/file/upload_abort', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ upload_id: uploadId })
+            }).catch(function() {});
+            throw error;
         }
     }
 
     async function writeKinFileBytes(kinPath, bytes) {
-        const response = bytes.length >= KIN_WRITE_UPLOAD_THRESHOLD
-            ? await uploadKinFileBytes(kinPath, bytes)
-            : await apiPostJson('/api/file/write_binary', { path: kinPath, data_base64: bytesToBase64(bytes) });
-        if (!response || response.response !== 'success') {
-            throw new Error((response && response.message) ? String(response.message) : 'Could not write file to Kin path');
+        if (bytes.length >= KIN_WRITE_UPLOAD_THRESHOLD) {
+            await uploadKinFileBytes(kinPath, bytes);
+            return;
+        }
+        const response = await fetch('/api/file/write_binary', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({ path: kinPath, data_base64: bytesToBase64(bytes) })
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || json.response !== 'success') {
+            throw new Error((json && json.message) ? String(json.message) : 'Could not write file to Kin path');
         }
     }
 
@@ -294,33 +335,17 @@ export function bootstrapKinOfficeApp(config) {
         validateOfficeBytes(bytes);
         await writeKinFileBytes(kinPath, bytes);
         const readback = await readKinFileBytes(kinPath);
-        if (!readback || readback.length !== bytes.length) throw new Error('Save verification failed (readback length mismatch)');
-    }
-
-    function clearAutosaveTimer() {
-        if (!autosaveTimer) return;
-        clearTimeout(autosaveTimer);
-        autosaveTimer = null;
-    }
-
-    function scheduleAutosave() {
-        clearAutosaveTimer();
-        if (!currentDirty || !currentKinPath || !editorOpen) return;
-        autosaveTimer = setTimeout(function() {
-            autosaveTimer = null;
-            runAutosave();
-        }, KIN_AUTOSAVE_DELAY_MS);
-    }
-
-    async function runAutosave() {
-        if (!currentDirty || !currentKinPath || !editorOpen) return;
-        try {
-            await saveCurrentDocument({ autosave: true });
-        } catch (error) {
-            const message = error && error.message ? error.message : String(error);
-            log('autosave failed:', message);
-            await openAlert(message, 'Autosave failed');
+        if (!readback || readback.length !== bytes.length) {
+            throw new Error('Save verification failed (readback length mismatch)');
         }
+    }
+
+    async function loadBlankTemplateBytes(fileType) {
+        log('loadBlankTemplateBytes:start', fileType || appConfig.fileType);
+        const json = await kinOfficeCommand({ action: 'template', type: fileType || appConfig.fileType });
+        const bytes = base64ToBytes(json.data_base64 || '');
+        log('loadBlankTemplateBytes:done', fileType || appConfig.fileType, bytes.length);
+        return bytes;
     }
 
     function ensureEditorShell() {
@@ -344,14 +369,14 @@ export function bootstrapKinOfficeApp(config) {
     }
 
     async function openLocalDocument(options) {
-        const opts = options || {};
+        const session = createDocumentSession(options || {});
+        log('openLocalDocument:start', session.fileName, session.fileType, 'isNew=' + session.isNew, 'bytes=' + (session.bytes ? session.bytes.length : 0));
         await ensureEditorShell();
-        currentFilename = opts.fileName || appConfig.defaultFilename;
-        currentFileType = opts.fileType || fileTypeFromName(currentFilename, appConfig.fileType);
+        currentSession = session;
+        currentFilename = session.fileName;
+        currentFileType = session.fileType;
         editorOpen = false;
         currentDirty = false;
-        dirtyGeneration = 0;
-        clearAutosaveTimer();
         const reqId = requestId('open');
         const opened = new Promise((resolve, reject) => {
             pendingOpen = { requestId: reqId, resolve, reject };
@@ -365,14 +390,23 @@ export function bootstrapKinOfficeApp(config) {
         postToEditor({
             command: 'open',
             requestId: reqId,
+            sessionId: session.id,
             fileName: currentFilename,
             fileType: currentFileType,
-            isNew: !!opts.isNew,
-            data_base64: opts.bytes ? bytesToBase64(opts.bytes) : '',
+            isNew: session.isNew,
+            data_base64: session.bytes ? bytesToBase64(session.bytes) : '',
             lang: 'en'
         });
-        await opened;
-        editorOpen = true;
+        log('openLocalDocument:posted', reqId);
+        try {
+            await opened;
+            editorOpen = true;
+            log('openLocalDocument:ready', session.fileName, session.fileType);
+        } catch (error) {
+            if (currentSession === session) currentSession = null;
+            log('openLocalDocument:failed', error && error.message ? error.message : String(error));
+            throw error;
+        }
     }
 
     function exportLocalDocument() {
@@ -400,54 +434,41 @@ export function bootstrapKinOfficeApp(config) {
         if (saveInFlight) return saveInFlight;
         const opts = options || {};
         saveInFlight = (async function() {
-            try {
-                if (!editorOpen) throw new Error('Open a document first, then use Save.');
-                if (opts.autosave && !currentKinPath) return;
-                const targetPath = opts.forceSaveAs || !currentKinPath
-                    ? await chooseSavePath(currentKinPath ? kinPathBaseName(currentKinPath) : currentFilename)
-                    : currentKinPath;
-                const saveDirtyGeneration = dirtyGeneration;
-                const exported = await exportLocalDocument();
-                const bytes = exported.bytes;
-                validateOfficeBytes(bytes);
-                await writeKinFileBytesSafe(targetPath, bytes);
-                currentKinPath = targetPath;
-                currentFilename = kinPathBaseName(targetPath) || exported.fileName || currentFilename;
-                currentFileType = fileTypeFromName(currentFilename, exported.fileType || currentFileType);
-                if (dirtyGeneration === saveDirtyGeneration) {
-                    currentDirty = false;
-                    clearAutosaveTimer();
-                } else {
-                    scheduleAutosave();
-                }
-                sendSaveResult(true, '');
-                requestWorkspaceRefresh();
-            } catch (error) {
-                if (!error || error.message !== 'cancel') {
-                    sendSaveResult(false, error && error.message ? error.message : String(error));
-                }
-                throw error;
-            }
+            if (!editorOpen) throw new Error('Open a document first, then use Save.');
+            const targetPath = opts.forceSaveAs || !currentKinPath
+                ? await chooseSavePath(currentKinPath ? kinPathBaseName(currentKinPath) : currentFilename)
+                : currentKinPath;
+            const exported = await exportLocalDocument();
+            const bytes = exported.bytes;
+            validateOfficeBytes(bytes);
+            await writeKinFileBytesSafe(targetPath, bytes);
+            currentKinPath = targetPath;
+            currentFilename = kinPathBaseName(targetPath) || exported.fileName || currentFilename;
+            currentFileType = fileTypeFromName(currentFilename, exported.fileType || currentFileType);
+            currentDirty = false;
+            sendSaveResult(true, '');
+            postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
         })();
         try {
             await saveInFlight;
+        } catch (error) {
+            if (!error || error.message !== 'cancel') {
+                sendSaveResult(false, error && error.message ? error.message : String(error));
+            }
+            throw error;
         } finally {
             saveInFlight = null;
         }
     }
 
     async function openKinPath(kinPath) {
-        const bytes = await readKinFileBytes(kinPath);
-        validateOfficeBytes(bytes);
         currentKinPath = kinPath;
         currentDirty = false;
-        dirtyGeneration = 0;
-        clearAutosaveTimer();
-        const filename = kinPathBaseName(kinPath) || appConfig.defaultFilename;
         await openLocalDocument({
-            fileName: filename,
-            fileType: fileTypeFromName(filename, appConfig.fileType),
-            bytes,
+            kinPath,
+            fileName: kinPathBaseName(kinPath) || appConfig.defaultFilename,
+            fileType: fileTypeFromName(kinPathBaseName(kinPath), appConfig.fileType),
+            bytes: await readKinFileBytes(kinPath),
             isNew: false
         });
     }
@@ -455,8 +476,6 @@ export function bootstrapKinOfficeApp(config) {
     async function openBlankDocument() {
         currentKinPath = null;
         currentDirty = false;
-        dirtyGeneration = 0;
-        clearAutosaveTimer();
         await openLocalDocument({
             fileName: appConfig.defaultFilename,
             fileType: appConfig.fileType,
@@ -464,15 +483,10 @@ export function bootstrapKinOfficeApp(config) {
         });
     }
 
-    function requestWorkspaceRefresh() {
-        postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
-    }
-
     async function handleMenuCommand(command) {
         try {
             if (command === MENU_OPEN_COMMAND) {
-                const kinPath = await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath });
-                await openKinPath(kinPath);
+                await openKinPath(await requestFileDialog({ mode: 'load', initialPath: dialogInitialPath }));
                 return;
             }
             if (command === MENU_SAVE_COMMAND) {
@@ -492,6 +506,7 @@ export function bootstrapKinOfficeApp(config) {
     async function handleEditorEvent(data) {
         if (!data) return;
         if (data.event === 'ready') {
+            log('editor event:ready');
             if (pendingOpen) {
                 const pending = pendingOpen;
                 pendingOpen = null;
@@ -500,13 +515,8 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'documentStateChange') {
+            log('editor event:dirty', !!data.changed);
             currentDirty = !!data.changed;
-            if (currentDirty) dirtyGeneration += 1;
-            if (currentDirty) {
-                scheduleAutosave();
-            } else {
-                clearAutosaveTimer();
-            }
             return;
         }
         if (data.event === 'saveRequested' || data.event === 'editorKeydown') {
@@ -523,6 +533,7 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'exported') {
+            log('editor event:exported', data.requestId || '', data.fileName || '', data.fileType || '', String(data.data_base64 || '').length);
             const pending = pendingExports.get(data.requestId || '');
             if (!pending) return;
             pendingExports.delete(data.requestId || '');
@@ -534,6 +545,7 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'exportFailed') {
+            log('editor event:exportFailed', data.requestId || '', data.error || '');
             const pending = pendingExports.get(data.requestId || '');
             if (!pending) return;
             pendingExports.delete(data.requestId || '');

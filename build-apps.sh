@@ -56,6 +56,7 @@ install_to_kin() {
 
     OFFICE_SRC="$SOURCE_DIR/Office"
     OFFICE_DEST="$KIN_REPO_DIR/Office"
+    KINOFFICE_APPS="kinoffice_common kinoffice_docs kinoffice_sheets kinoffice_slides"
     if [ ! -d "$OFFICE_SRC" ]; then
         echo "Error: Kin Office apps not found at $OFFICE_SRC"
         return 1
@@ -64,9 +65,34 @@ install_to_kin() {
     echo "Source: $OFFICE_SRC"
     echo "Destination: $OFFICE_DEST"
     mkdir -p "$OFFICE_DEST"
-    rsync -av "$OFFICE_SRC/" "$OFFICE_DEST/"
-    echo "Apps installed to Kin build."
-    # Only sync Office/ — never rsync the whole Applications tree or Kin core apps disappear.
+    for app in $KINOFFICE_APPS; do
+        if [ ! -d "$OFFICE_SRC/$app" ]; then
+            echo "Error: missing Kin Office app dir: $OFFICE_SRC/$app"
+            return 1
+        fi
+        rsync -av "$OFFICE_SRC/$app/" "$OFFICE_DEST/$app/"
+        echo "Installed $OFFICE_DEST/$app"
+    done
+    echo "Apps installed to Kin build (kinoffice_* only; other Office apps untouched)."
+}
+
+install_kinoffice_cmd() {
+    if [ -z "$KIN_BUILD_PATH" ]; then
+        return
+    fi
+    CMD_SRC="$SCRIPT_DIR/commands/kinoffice.cmd/kinoffice"
+    if [ ! -x "$CMD_SRC" ]; then
+        echo "Building kinoffice command..."
+        "$SCRIPT_DIR/scripts/build-kinoffice-cmd.sh"
+    fi
+    if [ ! -x "$CMD_SRC" ]; then
+        echo "Error: kinoffice command not built at $CMD_SRC"
+        return 1
+    fi
+    DEST="$KIN_BUILD_PATH/commands"
+    mkdir -p "$DEST"
+    install -m 755 "$CMD_SRC" "$DEST/kinoffice"
+    echo "Installed $DEST/kinoffice"
 }
 
 load_config
@@ -103,6 +129,7 @@ echo "=== Installing to Kin build ==="
 
 if [ -n "$KIN_BUILD_PATH" ]; then
     install_to_kin
+    install_kinoffice_cmd
 else
     echo "KIN_BUILD_PATH not set, skipping Kin install"
 fi

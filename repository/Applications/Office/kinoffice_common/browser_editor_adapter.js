@@ -1,11 +1,19 @@
 (function() {
     'use strict';
 
-    var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js';
-    var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js';
+    var BUILD_ID = '20260603-cache10';
+    var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js?kinOfficeBuild=' + BUILD_ID;
+    var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js?kinOfficeBuild=' + BUILD_ID;
     var apiPromise = null;
     var x2tPromise = null;
     var workingDirsReady = false;
+    var DEBUG_PREFIX = '[KinOfficeBrowser ' + BUILD_ID + ']';
+
+    function debugLog() {
+        try {
+            console.log.apply(console, [DEBUG_PREFIX].concat(Array.prototype.slice.call(arguments)));
+        } catch (_error) {}
+    }
 
     function loadScript(src) {
         return new Promise(function(resolve, reject) {
@@ -24,6 +32,7 @@
             script.src = src;
             script.onload = function() {
                 script.setAttribute('data-kin-loaded', 'true');
+                debugLog('loaded script', src);
                 resolve();
             };
             script.onerror = function() {
@@ -35,6 +44,7 @@
 
     function loadApi() {
         if (window.DocsAPI && window.DocsAPI.DocEditor) {
+            installFontDiagnostics();
             return Promise.resolve();
         }
         if (!apiPromise) {
@@ -42,9 +52,77 @@
                 if (!window.DocsAPI || !window.DocsAPI.DocEditor) {
                     throw new Error('Kin Office browser SDK loaded without DocsAPI.DocEditor.');
                 }
+                installFontDiagnostics();
             });
         }
         return apiPromise;
+    }
+
+    function streamHeader(stream) {
+        var data = stream && stream.data;
+        var size = stream && stream.size;
+        if (!data || !size) return null;
+        var bytes = [];
+        var count = Math.min(8, size);
+        for (var i = 0; i < count; i += 1) {
+            bytes.push(('0' + data[i].toString(16)).slice(-2));
+        }
+        return bytes.join(' ');
+    }
+
+    function describeFontInfo(name) {
+        var fonts = window.AscFonts;
+        if (!fonts || !fonts.g_map_font_index || !fonts.g_font_infos) return null;
+        var index = fonts.g_map_font_index[name];
+        var info = index !== undefined ? fonts.g_font_infos[index] : null;
+        if (!info) return null;
+        return {
+            name: info.Name,
+            indexR: info.indexR,
+            indexI: info.indexI,
+            indexB: info.indexB,
+            indexBI: info.indexBI
+        };
+    }
+
+    function installFontDiagnostics() {
+        var fonts = window.AscFonts;
+        if (!fonts || fonts._kinFontDiagnosticsInstalled) return;
+        fonts._kinFontDiagnosticsInstalled = true;
+        debugLog('font registry', {
+            files: fonts.g_font_files && fonts.g_font_files.length,
+            infos: fonts.g_font_infos && fonts.g_font_infos.length,
+            arial: describeFontInfo('Arial'),
+            dengxian: describeFontInfo('等线'),
+            calibri: describeFontInfo('Calibri')
+        });
+        if (!fonts.g_font_files) return;
+        fonts.g_font_files.forEach(function(file, index) {
+            if (!file || file._kinFontDiagnosticsWrapped || typeof file.LoadFontAsync !== 'function') return;
+            file._kinFontDiagnosticsWrapped = true;
+            var originalLoadFontAsync = file.LoadFontAsync;
+            file.LoadFontAsync = function(basePath, callback) {
+                debugLog('font load request', {
+                    index: index,
+                    id: file.Id,
+                    basePath: basePath,
+                    status: file.Status,
+                    streamIndex: file.stream_index
+                });
+                return originalLoadFontAsync.call(file, basePath, function() {
+                    var stream = fonts.g_fonts_streams && fonts.g_fonts_streams[file.stream_index];
+                    debugLog('font load complete', {
+                        index: index,
+                        id: file.Id,
+                        status: file.Status,
+                        streamIndex: file.stream_index,
+                        size: stream && stream.size,
+                        header: streamHeader(stream)
+                    });
+                    if (callback) callback();
+                });
+            };
+        });
     }
 
     function documentTypeFor(fileType) {
@@ -109,6 +187,22 @@
         }
         if (value && value.buffer instanceof ArrayBuffer) return new Uint8Array(value.buffer);
         return null;
+    }
+
+    function payloadToArrayBuffer(value) {
+        if (value instanceof ArrayBuffer) return value;
+        if (value instanceof Uint8Array) {
+            return value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength);
+        }
+        if (ArrayBuffer.isView(value)) {
+            return value.buffer.slice(value.byteOffset || 0, (value.byteOffset || 0) + value.byteLength);
+        }
+        if (typeof value === 'string') {
+            return new TextEncoder().encode(value).buffer;
+        }
+        var bytes = normalizeBytes(value);
+        if (bytes && bytes.length) return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        throw new Error('Kin Office has no binary payload to open.');
     }
 
     function findFirstUsefulPayload(value) {
@@ -216,6 +310,7 @@
 
     function convertDocumentToBin(bytes, fileName, fileType) {
         var inputExt = String(fileType || 'docx').replace(/^\./, '').toLowerCase();
+        debugLog('convertDocumentToBin:start', fileName, fileType, bytes && bytes.length);
         return ensureX2T().then(function(module) {
             ensureWorkingDirs(module);
             var inputBytes = normalizeBytes(bytes);
@@ -231,6 +326,7 @@
             var code = module.ccall('main1', 'number', ['string'], [paramsPath]);
             if (code !== 0) throw new Error('Kin Office x2t open conversion failed with code: ' + code);
             var bin = module.FS.readFile(outputPath, { encoding: 'binary' });
+            debugLog('convertDocumentToBin:done', fileName, fileType, typeof bin === 'string' ? bin.length : (bin && bin.length));
             return {
                 bin: bin,
                 media: readMediaFiles(module)
@@ -405,10 +501,50 @@
     function postInnerEditorCommand(command, data) {
         var frame = document.querySelector('iframe[name="frameEditor"]');
         if (!frame || !frame.contentWindow) return;
-        frame.contentWindow.postMessage({
+        var payload = {
             command: command,
             data: data
-        }, window.location.origin);
+        };
+        frame.contentWindow.postMessage(JSON.stringify(payload), window.location.origin);
+        debugLog('inner command', command);
+    }
+
+    function createLocalDocumentInfo(fileName, fileType) {
+        return {
+            title: fileName,
+            key: 'kin-office-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+            url: '',
+            fileType: fileType,
+            options: { oform: false },
+            permissions: {
+                edit: true,
+                download: true,
+                print: true,
+                review: true,
+                chat: false,
+                protect: false,
+                comment: false,
+                fillForms: false,
+                modifyFilter: true,
+                modifyContentControl: true,
+                copy: true
+            }
+        };
+    }
+
+    function describeEditorError(event) {
+        var data = event && event.data;
+        if (!data) return 'Kin Office local editor error';
+        if (typeof data === 'string') return data;
+        if (data.errorDescription) return String(data.errorDescription);
+        if (data.message) return String(data.message);
+        if (data.error) return String(data.error);
+        if (data.errorCode) return 'Kin Office local editor error: ' + data.errorCode;
+        try {
+            return JSON.stringify(data);
+        } catch (_error) {
+            return 'Kin Office local editor error';
+        }
     }
 
     function createInstance(options) {
@@ -422,14 +558,42 @@
         var editor = null;
         var sourcePayload = null;
         var sourceMedia = {};
+        var readySent = false;
 
         if (!opts.isNew && !opts.bytes) {
             throw new Error('No document bytes were provided.');
         }
 
+        function markReady() {
+            if (readySent) return;
+            readySent = true;
+            debugLog('ready', fileName, fileType);
+            installDirectSaveHookSoon(fileType, opts.onSaveRequested, opts.onError, 20);
+            if (opts.onReady) opts.onReady();
+        }
+
+        function watchInnerDocumentReady(attemptsLeft) {
+            try {
+                var main = getMainController(fileType);
+                if (main && main._isDocReady) {
+                    debugLog('inner _isDocReady observed');
+                    markReady();
+                    return;
+                }
+            } catch (_error) {}
+            if ((attemptsLeft || 0) <= 0 || readySent) {
+                if (!readySent) debugLog('inner ready watch exhausted');
+                return;
+            }
+            setTimeout(function() {
+                watchInnerDocumentReady(attemptsLeft - 1);
+            }, 100);
+        }
+
         return sourcePromise.then(function(source) {
             sourcePayload = source.bin;
             sourceMedia = source.media || {};
+            debugLog('source ready', fileName, fileType, typeof sourcePayload === 'string' ? sourcePayload.slice(0, 4) : typeof sourcePayload);
             return loadApi();
         }).then(function() {
             var container = document.getElementById(containerId);
@@ -439,24 +603,25 @@
             container.innerHTML = '';
 
             editor = new window.DocsAPI.DocEditor(containerId, {
-                document: {
-                    title: fileName,
-                    url: fileName,
-                    fileType: fileType,
-                    permissions: {
-                        edit: true,
-                        download: true,
-                        print: true,
-                        review: true,
-                        chat: false,
-                        protect: false
-                    }
-                },
                 documentType: documentTypeFor(fileType),
                 editorConfig: {
                     lang: opts.lang || 'en',
                     mode: 'edit',
+                    canSaveDocumentToBinary: true,
+                    user: {
+                        id: 'kin-local-user',
+                        name: 'Kin User'
+                    },
+                    coEditing: {
+                        mode: 'strict',
+                        change: false
+                    },
                     customization: {
+                        font: {
+                            name: 'Arial',
+                            size: '11px'
+                        },
+                        forceWesternFontSize: true,
                         autosave: false,
                         forcesave: false,
                         help: false,
@@ -486,23 +651,36 @@
                     },
                     onAppReady: function() {
                         try {
-                            if (sourceMedia && Object.keys(sourceMedia).length && typeof editor.sendCommand === 'function') {
-                                editor.sendCommand({
-                                    command: 'asc_setImageUrls',
-                                    data: { urls: sourceMedia }
-                                });
+                            debugLog('onAppReady', fileName, fileType);
+                            if (!editor || typeof editor.openDocument !== 'function') {
+                                throw new Error('Kin Office binary open API is not available.');
                             }
-                            editor.sendCommand({
-                                command: 'asc_openDocument',
-                                data: { buf: sourcePayload }
+                            debugLog('send local metadata without SDK offline mode');
+                            postInnerEditorCommand('openDocument', {
+                                doc: createLocalDocumentInfo(fileName, fileType)
                             });
+                            setTimeout(function() {
+                                try {
+                                    debugLog('open binary', fileName, fileType);
+                                    editor.openDocument({
+                                        buffer: payloadToArrayBuffer(sourcePayload)
+                                    });
+                                    watchInnerDocumentReady(300);
+                                } catch (error) {
+                                    debugLog('open binary failed', error && error.message ? error.message : String(error));
+                                    if (opts.onError) opts.onError(error);
+                                }
+                            }, 0);
+                            if (sourceMedia && Object.keys(sourceMedia).length) {
+                                postInnerEditorCommand('asc_setImageUrls', { urls: sourceMedia });
+                            }
                         } catch (error) {
                             if (opts.onError) opts.onError(error);
                         }
                     },
                     onDocumentReady: function() {
-                        installDirectSaveHookSoon(fileType, opts.onSaveRequested, opts.onError, 20);
-                        if (opts.onReady) opts.onReady();
+                        debugLog('onDocumentReady event');
+                        markReady();
                     },
                     onDocumentStateChange: function(event) {
                         if (opts.onDirty) opts.onDirty(!!(event && event.data));
@@ -517,7 +695,8 @@
                         extractEventBytes(event);
                     },
                     onError: function(event) {
-                        var message = event && event.data ? String(event.data) : 'Kin Office local editor error';
+                        var message = describeEditorError(event);
+                        debugLog('onError', message);
                         if (opts.onError) opts.onError(new Error(message));
                     }
                 },

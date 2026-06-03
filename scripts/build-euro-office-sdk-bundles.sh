@@ -25,11 +25,11 @@ if [[ ! -d "${SOURCE_SDKJS}" ]]; then
   exit 1
 fi
 
-echo "Building Euro-Office sdk-all-min.js bundles (desktop)..."
+echo "Building Euro-Office sdk-all-min.js bundles (browser)..."
 (
   cd "${BUILD_DIR}"
   npm ci
-  npx grunt --desktop=true --no-color
+  npx grunt --no-color
 )
 
 for editor in word cell slide; do
@@ -55,6 +55,42 @@ if [[ ! -f "${DEPLOY_SDKJS}/vendor/polyfill.js" ]]; then
 fi
 mkdir -p "${RUNTIME_SDKJS}/vendor"
 cp -f "${DEPLOY_SDKJS}/vendor/polyfill.js" "${RUNTIME_SDKJS}/vendor/polyfill.js"
+
+LIBFONT_DEPLOY="${DEPLOY_SDKJS}/common/libfont/engine"
+LIBFONT_RUNTIME="${RUNTIME_SDKJS}/common/libfont/engine"
+if [[ ! -d "${LIBFONT_DEPLOY}" ]]; then
+  echo "build-euro-office-sdk-bundles.sh: missing libfont deploy dir: ${LIBFONT_DEPLOY}" >&2
+  exit 1
+fi
+
+echo "Installing sdkjs/common runtime assets..."
+COMMON_DEPLOY="${DEPLOY_SDKJS}/common"
+COMMON_RUNTIME="${RUNTIME_SDKJS}/common"
+if [[ ! -d "${COMMON_DEPLOY}" ]]; then
+  echo "build-euro-office-sdk-bundles.sh: missing deploy common dir: ${COMMON_DEPLOY}" >&2
+  exit 1
+fi
+ALLFONTS_BACKUP=""
+if [[ -f "${COMMON_RUNTIME}/AllFonts.js" ]]; then
+  ALLFONTS_BACKUP="$(mktemp)"
+  cp -f "${COMMON_RUNTIME}/AllFonts.js" "${ALLFONTS_BACKUP}"
+fi
+mkdir -p "${COMMON_RUNTIME}"
+rsync -a "${COMMON_DEPLOY}/" "${COMMON_RUNTIME}/"
+if [[ -n "${ALLFONTS_BACKUP}" ]]; then
+  cp -f "${ALLFONTS_BACKUP}" "${COMMON_RUNTIME}/AllFonts.js"
+  rm -f "${ALLFONTS_BACKUP}"
+fi
+echo "Installed sdkjs/common ($(du -sh "${COMMON_RUNTIME}" | cut -f1))"
+
+mkdir -p "${LIBFONT_RUNTIME}"
+for libfont_file in fonts.js fonts.wasm fonts_ie.js fonts_native.js; do
+  if [[ ! -f "${LIBFONT_RUNTIME}/${libfont_file}" ]]; then
+    echo "build-euro-office-sdk-bundles.sh: missing libfont artifact after common sync: ${LIBFONT_RUNTIME}/${libfont_file}" >&2
+    exit 1
+  fi
+  echo "Verified libfont/${libfont_file}"
+done
 
 rm -rf "${RUNTIME_SDKJS}/source-loader"
 

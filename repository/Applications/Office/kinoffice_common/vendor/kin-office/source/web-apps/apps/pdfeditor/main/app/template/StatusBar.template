@@ -1,0 +1,33 @@
+
+<div class="statusbar">
+    <div class="status-group dropup">
+        <label id="label-pages" class="status-label dropdown-toggle" data-toggle="dropdown" data-hint="0" data-hint-direction="top"><%= textPageNumber %></label>
+        <div id="status-goto-box" class="dropdown-menu">
+            <label class="float-left"><%= textGotoPage %></label>
+            <div id="status-goto-page" style="display:inline-block;"></div>
+        </div>
+    </div>
+    <div class="separator short space"></div>
+    <div class="status-group">
+        <span id="slot-status-btn-prev" style="display: inline-block;"></span>
+        <span id="slot-status-btn-next" style="display: inline-block;"></span>
+    </div>
+    <div class="status-group" style="width:100%; text-align:center;">
+        <label id="label-action" class="status-label" data-layout-name="statusBar-actionStatus"></label>
+    </div>
+    <div class="status-group cnt-flex-center" style="flex-shrink:0;">
+        <div class="separator short hide-select-tools"></div>
+        <button id="status-btn-select-tool" type="button" class="btn small btn-toolbar hide-select-tools" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-select-tool"></use></svg></button>
+        <button id="status-btn-hand-tool" type="button" class="btn small btn-toolbar hide-select-tools" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-hand-tool"></use></svg></button>
+        <div class="separator short hide-select-tools"></div>
+        <button id="btn-zoom-topage" type="button" class="btn small btn-toolbar" aria-pressed="false" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-ic-zoomtopage"></use></svg></button>
+        <button id="btn-zoom-towidth" type="button" class="btn small btn-toolbar" aria-pressed="false" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-ic-zoomtowidth"></use></svg></button>
+        <button id="btn-zoom-down" type="button" class="btn small btn-toolbar"><svg class="icon uni-scale"><use href="#btn-zoomdown"></use></svg></button>
+        <div class="cnt-zoom">
+            <div class="dropdown-toggle" data-toggle="dropdown" data-hint="0" data-hint-direction="top" role="button" aria-haspopup="menu" aria-expanded="false">
+                <label id="label-zoom" class="status-label">Zoom 100%</label>
+            </div>
+        </div>
+        <button id="btn-zoom-up" type="button" class="btn small btn-toolbar"><svg class="icon uni-scale"><use href="#btn-zoomup"></use></svg></button>
+    </div>
+</div>

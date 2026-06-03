@@ -4,11 +4,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${ROOT}/.config.ini"
 DEPLOY_MODE=0
+INSTALL_TO_KIN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --deploy-mode)
       DEPLOY_MODE=1
+      shift
+      ;;
+    --to-kin)
+      INSTALL_TO_KIN=1
       shift
       ;;
     --restart)
@@ -21,8 +26,12 @@ Usage: $(basename "$0") [OPTIONS]
 
 Options:
   --deploy-mode   Production: install apps into /usr/lib/kin/repository/Applications
+  --to-kin        Dev only: copy kinoffice_* into KIN_BUILD_PATH (never deletes Kin files)
   --restart       No-op kept for compatibility
   --help          Show this help
+
+By default this script does not write to your Kin build tree.
+Use --to-kin when you explicitly want to refresh Kin Office apps in Kin.
 
 Environment:
   KIN_BUILD_PATH  Dev Kin build directory. Also read from ${CONFIG_FILE}.
@@ -50,6 +59,22 @@ resolve_kin_build_path() {
   (cd "${configured}" 2>/dev/null && pwd) || return 1
 }
 
+KINOFFICE_APP_DIRS=(kinoffice_common kinoffice_docs kinoffice_sheets kinoffice_slides)
+
+KINOFFICE_COMMON_RUNTIME_EXCLUDE=(--exclude 'vendor/kin-office/source/')
+
+install_kinoffice_common() {
+  local src="$1"
+  local dest="$2"
+  mkdir -p "${dest}"
+  rsync -a "${KINOFFICE_COMMON_RUNTIME_EXCLUDE[@]}" "${src}/" "${dest}/"
+  # Drop legacy full-tree deploys: source is for grunt/npm builds, not Kin runtime.
+  if [[ -d "${dest}/vendor/kin-office/source" ]]; then
+    rm -rf "${dest}/vendor/kin-office/source"
+    echo "deploy.sh: removed stale vendor/kin-office/source from Kin build"
+  fi
+}
+
 install_apps() {
   local target_root="$1"
   local target_apps="${target_root%/}/Applications"
@@ -63,38 +88,59 @@ install_apps() {
     exit 1
   fi
   mkdir -p "${office_dest}"
-  rsync -a --delete "${office_src}/" "${office_dest}/"
-  echo "deploy.sh: installed Kin Office apps to ${office_dest}"
+  local app
+  for app in "${KINOFFICE_APP_DIRS[@]}"; do
+    if [[ ! -d "${office_src}/${app}" ]]; then
+      echo "deploy.sh: ERROR: missing Kin Office app dir: ${office_src}/${app}" >&2
+      exit 1
+    fi
+    if [[ "${app}" == kinoffice_common ]]; then
+      install_kinoffice_common "${office_src}/${app}" "${office_dest}/${app}"
+      echo "deploy.sh: copied ${office_dest}/${app} (runtime only; Euro-Office source/ excluded)"
+    else
+      rsync -a "${office_src}/${app}/" "${office_dest}/${app}/"
+      echo "deploy.sh: copied ${office_dest}/${app}"
+    fi
+  done
+  echo "deploy.sh: kinoffice_* only — no --delete, no other Kin paths touched"
 }
 
-reload_dev_nginx() {
-  local kin_build_path="$1"
-  local kin_root kin_nginx_dir kin_nginx_conf
-  kin_root="$(cd "${kin_build_path}/.." && pwd)"
-  kin_nginx_dir="${kin_root}/nginx"
-  kin_nginx_conf="${kin_nginx_dir}/nginx.conf"
-
-  if command -v nginx >/dev/null 2>&1 && [[ -f "${kin_nginx_conf}" ]]; then
-    if nginx -t -p "${kin_nginx_dir}" -c "${kin_nginx_conf}" >/dev/null; then
-      if [[ -f "${kin_nginx_dir}/logs/nginx.pid" ]]; then
-        local nginx_pid
-        nginx_pid="$(sed -n '1p' "${kin_nginx_dir}/logs/nginx.pid" 2>/dev/null || true)"
-        if [[ -n "${nginx_pid}" ]] && kill -0 "${nginx_pid}" 2>/dev/null; then
-          nginx -s reload -p "${kin_nginx_dir}" -c "${kin_nginx_conf}" >/dev/null
-          echo "deploy.sh: reloaded Kin nginx"
-        fi
-      fi
-    else
-      echo "deploy.sh: WARNING: Kin nginx config test failed" >&2
-    fi
+install_kinoffice_cmd() {
+  local commands_dir="$1"
+  local cmd_src="${ROOT}/commands/kinoffice.cmd/kinoffice"
+  if [[ ! -x "${cmd_src}" ]]; then
+    echo "deploy.sh: building kinoffice command..."
+    "${ROOT}/scripts/build-kinoffice-cmd.sh"
   fi
+  if [[ ! -x "${cmd_src}" ]]; then
+    echo "deploy.sh: ERROR: kinoffice command not built at ${cmd_src}" >&2
+    exit 1
+  fi
+  mkdir -p "${commands_dir}"
+  install -m 755 "${cmd_src}" "${commands_dir}/kinoffice"
+  echo "deploy.sh: installed ${commands_dir}/kinoffice"
 }
 
 cd "${ROOT}"
 
 if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
   install_apps "/usr/lib/kin/repository"
+  install_kinoffice_cmd "/usr/lib/kin/commands"
   echo "deploy.sh: browser-only kin-office installed; no Docker, /ds/, or /direct/ endpoints are used"
+  exit 0
+fi
+
+if [[ "${INSTALL_TO_KIN}" -ne 1 ]]; then
+  cat <<EOF
+deploy.sh: nothing installed (Kin build was not modified).
+To copy kinoffice_* into your Kin build, run:
+
+  ./deploy.sh --to-kin
+
+Production install:
+
+  sudo ./deploy.sh --deploy-mode
+EOF
   exit 0
 fi
 
@@ -110,5 +156,5 @@ fi
 export KIN_BUILD_PATH
 
 install_apps "${KIN_BUILD_PATH}/repository"
-reload_dev_nginx "${KIN_BUILD_PATH}"
-echo "deploy.sh: browser-only kin-office installed from ${ROOT}"
+install_kinoffice_cmd "${KIN_BUILD_PATH}/commands"
+echo "deploy.sh: Kin Office copied from ${ROOT} (Kin nginx not reloaded)"

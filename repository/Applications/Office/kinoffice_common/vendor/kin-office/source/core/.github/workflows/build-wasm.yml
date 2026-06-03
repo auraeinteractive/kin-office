@@ -1,0 +1,43 @@
+name: Build WASM
+
+on:
+  pull_request:
+    paths:
+      - '**/wasm/**'
+      - 'DesktopEditor/graphics/pro/js/**'
+      - 'DesktopEditor/fontengine/js/**'
+      - 'DesktopEditor/doctrenderer/**'
+      - 'OfficeUtils/js/**'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - '.github/workflows/build-wasm.yml'
+
+jobs:
+  build-wasm:
+    runs-on: [ubuntu-latest, self-hosted]
+    container:
+        image: emscripten/emsdk:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          path: core/
+
+      - name: Checkout sdkjs repository
+        uses: actions/checkout@v6
+        with:
+          repository: Euro-Office/sdkjs
+          ref: main
+          path: sdkjs/
+
+      - name: Verify Emscripten
+        run: emcc -v
+
+      - name: Build with Emscripten
+        run: |
+          mkdir -p ../build-wasm-dir
+          cd ../build-wasm-dir
+          /bin/bash -c "emcmake cmake -S $GITHUB_WORKSPACE/core -B . -DEO_CORE_OUTPUT_DIR=$GITHUB_WORKSPACE/package && cmake --build ."
+        shell: bash

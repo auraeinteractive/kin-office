@@ -44,7 +44,7 @@
   }
 
   CDocsCoApi.prototype.init = function(user, docid, documentCallbackUrl, token, editorType, documentFormatSave, docInfo, shardKey, wopiSrc, userSessionId, headingsColor, openCmd) {
-    if (this._CoAuthoringApi && this._CoAuthoringApi.isRightURL()) {
+    if (this._CoAuthoringApi && this._CoAuthoringApi.isRightURL() && !window["KinOfficeNoCoAuthoring"]) {
       var t = this;
       this._CoAuthoringApi.onAuthParticipantsChanged = function(e, id) {
         t.callback_OnAuthParticipantsChanged(e, id);
@@ -145,8 +145,20 @@
       this._onlineWork = true;
     } else {
       // Фиктивные вызовы
+      this.onLicense({
+        "type": Asc.c_oLicenseResult.Success,
+        "branding": true,
+        "customization": true,
+        "light": false,
+        "mode": Asc.c_oLicenseMode.None,
+        "rights": Asc.c_oRights.Edit,
+        "buildVersion": null,
+        "buildNumber": null,
+        "liveViewerSupport": false,
+        "protectionSupport": true,
+        "isAnonymousSupport": true
+      });
       this.onFirstConnect();
-      this.onLicense(null);
     }
   };
 
@@ -175,6 +187,19 @@
       this.callback_OnSpellCheckInit('');
       this.callback_OnSetIndexUser('123');
       this.onFirstLoadChangesEnd();
+      if (window["KinOfficeNoCoAuthoring"] && opt_openCmd && opt_openCmd["url"]) {
+        var urls = {};
+        var format = opt_openCmd["format"] || "docx";
+        urls["origin." + format] = opt_openCmd["url"];
+        this.callback_OnDocumentOpen({
+          "data": {
+            "type": "open",
+            "status": "ok",
+            "openedAt": Date.now(),
+            "data": urls
+          }
+        });
+      }
     }
   };
 

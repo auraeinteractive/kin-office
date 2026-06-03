@@ -1,7 +1,7 @@
 {
   "id": "kinoffice_docs",
   "displayName": "Docs",
-  "version": "12",
+  "version": "19",
   "entry": "main.js",
   "category": "Office",
   "published": true

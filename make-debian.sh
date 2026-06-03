@@ -52,8 +52,17 @@ if [[ -d "$ROOT/scripts" ]]; then
 	find "$MODULE_DIR/scripts" -type f -name "*.sh" -exec chmod 755 {} +
 fi
 
-# Copy repository/ (Kin apps)
-cp -a "$ROOT/repository" "$MODULE_DIR/"
+# Copy repository/ (Kin apps) — runtime only; Euro-Office source snapshots stay in the dev tree.
+mkdir -p "$MODULE_DIR/repository"
+rsync -a --exclude 'Applications/Office/kinoffice_common/vendor/kin-office/source/' \
+	"$ROOT/repository/" "$MODULE_DIR/repository/"
+
+# Copy kinoffice command (built on demand)
+if [ ! -x "$ROOT/commands/kinoffice.cmd/kinoffice" ]; then
+	"$ROOT/scripts/build-kinoffice-cmd.sh"
+fi
+mkdir -p "$MODULE_DIR/commands"
+install -m 755 "$ROOT/commands/kinoffice.cmd/kinoffice" "$MODULE_DIR/commands/kinoffice"
 
 # Copy specs/ if present
 if [[ -d "$ROOT/specs" ]]; then
@@ -87,7 +96,11 @@ if [ -d /opt/kin/modules/kin-office/repository/Applications ]; then
     mkdir -p /usr/lib/kin/repository/Applications
     cp -a /opt/kin/modules/kin-office/repository/Applications/. /usr/lib/kin/repository/Applications/
 fi
-echo "kin-office: installed browser-only apps; no service or Docker containers are required"
+if [ -x /opt/kin/modules/kin-office/commands/kinoffice ]; then
+    mkdir -p /usr/lib/kin/commands
+    install -m 755 /opt/kin/modules/kin-office/commands/kinoffice /usr/lib/kin/commands/kinoffice
+fi
+echo "kin-office: installed browser-only apps and kinoffice command; no service or Docker containers are required"
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
 

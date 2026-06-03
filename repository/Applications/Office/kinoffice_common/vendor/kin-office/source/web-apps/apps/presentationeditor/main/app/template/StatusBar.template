@@ -1,0 +1,33 @@
+
+<div class="statusbar">
+    <div class="status-group">
+        <div id="slot-status-btn-preview" style="display: inline-block;" class=" margin-left-10"></div>
+    </div>
+    <div class="status-group dropup">
+        <label id="status-label-pages" class="status-label dropdown-toggle margin-left-7" style="display: none;" data-toggle="dropdown" data-hint="0" data-hint-direction="top" data-hint-offset="-3, 0"><%= Common.Utils.String.format(scope.pageIndexText, 1, 1) %></label>
+        <label id="status-label-slide-master" class="status-label margin-left-7" style="display: none;" data-hint="0" data-hint-direction="top" data-hint-offset="-3, 0"><%= scope.textSlideMaster %></label>
+        <div id="status-goto-box" class="dropdown-menu">
+            <label class="float-left"><%= scope.goToPageText %></label>
+            <div id="status-goto-page" style="display:inline-block;"></div>
+        </div>
+    </div>
+    <div class="status-group" style="width:100%; text-align:center;">
+        <label id="status-label-action" class="status-label" data-layout-name="statusBar-actionStatus"></label>
+    </div>
+    <div class="status-group cnt-flex-center" style="flex-shrink:0;">
+        <span id="btn-cnt-lang" class="el-edit" data-layout-name="statusBar-textLang"></span>
+        <span id="btn-doc-lang" class="el-edit" data-layout-name="statusBar-docLang"></span>
+        <div class="separator short el-edit space"></div>
+        <span id="btn-doc-spell" class="el-edit"></span>
+        <div class="separator short el-edit el-lang"></div>
+        <button id="btn-zoom-topage" type="button" class="btn small btn-toolbar" aria-pressed="false" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-ic-zoomtoslide"></use></svg></button>
+        <button id="btn-zoom-towidth" type="button" class="btn small btn-toolbar" aria-pressed="false" data-hint="0" data-hint-direction="top" data-hint-offset="small"><svg class="icon uni-scale"><use href="#btn-ic-zoomtowidth"></use></svg></button>
+        <button id="btn-zoom-down" type="button" class="btn small btn-toolbar"><svg class="icon uni-scale"><use href="#btn-zoomdown"></use></svg></button>
+        <div class="cnt-zoom">
+            <div class="dropdown-toggle" data-toggle="dropdown" data-hint="0" data-hint-direction="top" role="button" aria-haspopup="menu" aria-expanded="false">
+                <label id="status-label-zoom" class="status-label">Zoom 100%</label>
+            </div>
+        </div>
+        <button id="btn-zoom-up" type="button" class="btn small btn-toolbar"><svg class="icon uni-scale"><use href="#btn-zoomup"></use></svg></button>
+    </div>
+</div>

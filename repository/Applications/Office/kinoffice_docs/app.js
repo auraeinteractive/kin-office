@@ -1,4 +1,4 @@
-import { bootstrapKinOfficeApp } from '../kinoffice_common/office_app.js';
+import { bootstrapKinOfficeApp } from '../kinoffice_common/office_app.js?kinOfficeBuild=20260603-cache10';
 
 bootstrapKinOfficeApp({
     appTag: 'kinoffice_docs',
