@@ -166,13 +166,49 @@ Current generator behavior:
 - Generated files use IDs like `odttf10-000001`.
 - The first 32 bytes are XOR-obfuscated before writing.
 - Latin aliases such as `Arial`, `Calibri`, and `Segoe UI` map to Liberation/Noto fonts.
-- CJK aliases such as `等线`, `DengXian`, `Microsoft YaHei`, `SimSun`, `NSimSun`, `黑体`, and `宋体` map to `DroidSansFallbackFull.ttf`.
+- CJK aliases such as `等线`, `DengXian`, `Microsoft YaHei`, `SimSun`, `NSimSun`, `黑体`, and `宋体` map to the Simplified Chinese face in `NotoSansCJK-*.ttc`.
 
-Current known issue:
+Failed font-catalog attempt:
 
-- User-visible editor text can still appear as square/tofu boxes.
-- The right debugging layer is `AscFonts`, loaded font files, decoded font stream headers, and actual glyph coverage/face selection.
+- `DroidSansFallbackFull.ttf` has CJK coverage but lacks normal Latin A-Z/a-z glyph coverage. When Euro-Office selected the East Asian `等线` default, English text rendered as tofu boxes.
+- `20260604-cache11` switched CJK aliases to `NotoSansCJK-*.ttc` face index 2, which includes Latin and CJK glyphs.
+- User testing reported no visible change after deploy. Do not repeat this as the main fix unless new diagnostics prove the runtime is actually loading the wrong CJK alias.
+- The working hypothesis must move away from "the CJK fallback file lacks Latin glyphs" and toward document/template loading, x2t conversion, font streams actually reaching the renderer, or text/glyph encoding inside the internal bin.
+- The right debugging layer remains `AscFonts`, loaded font files, decoded font stream headers, and actual glyph coverage/face selection.
 - Do not attempt to fix this with CSS `font-family` rules; those affect HTML chrome, not Euro-Office document canvas rendering.
+
+Failed debug-default attempt:
+
+- `20260604-cache12` makes Docs open `kinoffice_common/debug/test.docx` as the default document instead of the blank internal-bin template.
+- `assets/test.docx` is an external DOCX containing readable Arial text ("Hello world!" and "How are you doing?").
+- User testing still showed `Document.docx`, a blank page, Chinese default font, and tofu boxes. That means the debug DOCX did not actually become the opened session.
+
+Current debug path:
+
+- `20260604-cache13` removes the bottom-left build overlay and sends those messages to `console.log` only.
+- Docs forces the debug default even if Kin passes a `path` or `kin_open_path` query parameter.
+- Console logs now record the launch query, forced-debug decision, fetched debug DOCX URL and byte count, posted open payload, and adapter `createInstance` options.
+- User testing after `cache13` still showed the same visual issue, but the console proved the debug path had not run: the outer Docs app bootstrapped `office_app.js?kinOfficeBuild=20260604-cache11` and opened `Document.docx` with `isNew=true` and `bytes=0`. Only the inner adapter had reached `cache13`.
+- `20260604-cache14` moves Docs to a new wrapper entry file, `app_debug_20260604_cache14.js`, and logs `kinoffice_docs launcher` before creating the Kin window. This is meant to bypass a stale browser/Kin module cache for `kinoffice_docs/app.js`.
+- After the next test, the user clarified the visible boxes were typed into the blank document; `test.docx` was still not loaded. The console still showed `kin_repo_entry=app.js` and no `kinoffice_docs launcher` log, which means the already-running Kin workspace was still using stale app metadata for `kinoffice_docs`.
+- The Docs manifest now points directly to `app_debug_20260604_cache14.js` as version `21`. A running Kin workspace may need to reload its application metadata before this takes effect.
+- Direct manifest entries are loaded as classic scripts, not module scripts. The first direct-entry attempt failed with `Cannot use import statement outside a module`; `app_debug_20260604_cache14.js` and the fallback `app.js` now use dynamic `import()` from a classic-script wrapper.
+- If `Debug Arial Test.docx` renders correctly, debug the blank/template/internal-bin path. If it still renders as boxes, debug x2t conversion, internal document text encoding, or Euro-Office canvas/font loading for a known Arial DOCX.
+
+Font thumbnail sprite 404:
+
+- The console also showed `GET .../sdkjs/common/Images/fonts_thumbnail.png.bin 404`.
+- That file family was missing from the packaged browser runtime. `scripts/generate-kinoffice-font-thumbnail-bins.py` now creates transparent fallback alpha-mask sprites for `fonts_thumbnail*.png.bin` and `fonts_thumbnail_ea*.png.bin`.
+- The fallback sprites only prevent the font combobox from loading a 404 response as binary sprite data. They are not expected to fix document canvas text by themselves.
+
+Inner editor cache bust:
+
+- Once `Debug Arial Test.docx` loaded, the canvas still rendered boxes. The console stack showed inner editor resources such as `sdk-all-min.js?kinOfficeBuild=20260604-cache11` even while the outer wrapper was cache14.
+- Euro-Office `apps/api/documents/api.js` hardcoded the editor iframe query as `?_dc=0`; `scripts/patch-euro-office-save-hooks.py` now rewrites that to the current Kin Office cache id.
+- `20260604-cache15` also moves the Docs manifest to `app_debug_20260604_cache15.js` so the manifest entry filename itself is cache-busted.
+- User testing after `cache15` showed progress: `Debug Arial Test.docx` loaded with the expected title and Arial toolbar state, but document text was still tofu. The console still showed stack frames from `sdk-all-min.js?kinOfficeBuild=20260604-cache11`.
+- `20260604-cache16` treats that as a Euro-Office browser-cache/service-worker problem rather than another font-catalog problem. `browser_editor_adapter.js` unregisters Euro-Office service workers scoped under the packaged vendor path and deletes `document_editor_static_*` / `document_editor_dynamic_*` Cache Storage entries before loading `DocsAPI`.
+- If cache16 logs show current `sdk-all-min.js?kinOfficeBuild=20260604-cache16` and text is still tofu, stop pursuing outer app/cache busting and instrument the real inner editor `AscFonts` path instead.
 
 Useful diagnostics already installed in `browser_editor_adapter.js`:
 

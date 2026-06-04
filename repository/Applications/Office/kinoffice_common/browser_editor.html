@@ -6,31 +6,17 @@
     <style>
         html, body, #editor { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: transparent; }
         #editor.loading { opacity: 0.5; transition: opacity 160ms ease; }
-        #kin-debug-status {
-            position: fixed;
-            left: 8px;
-            bottom: 8px;
-            z-index: 2147483647;
-            padding: 3px 6px;
-            border-radius: 4px;
-            background: rgba(20, 20, 20, 0.78);
-            color: #fff;
-            font: 11px/1.3 sans-serif;
-            pointer-events: none;
-        }
     </style>
 </head>
 <body>
     <div id="editor"></div>
-    <div id="kin-debug-status">Kin Office build 20260603-cache10 loading</div>
-    <script src="vendor/kin-office/empty_bin.js?kinOfficeBuild=20260603-cache10"></script>
-    <script src="browser_editor_adapter.js?kinOfficeBuild=20260603-cache10"></script>
+    <script src="vendor/kin-office/empty_bin.js?kinOfficeBuild=20260604-cache16"></script>
+    <script src="browser_editor_adapter.js?kinOfficeBuild=20260604-cache16"></script>
     <script>
     (function() {
         'use strict';
         var ORIGIN = window.location.origin;
         var editorEl = document.getElementById('editor');
-        var statusEl = document.getElementById('kin-debug-status');
         var editor = null;
 
         function debugLog() {
@@ -44,7 +30,6 @@
         }
 
         function setStatus(text) {
-            if (statusEl) statusEl.textContent = 'Kin Office build 20260603-cache10 ' + text;
             debugLog(text);
         }
 
@@ -74,7 +59,13 @@
         async function openDocument(data) {
             if (!window.KinOfficeBrowser) throw new Error('Kin Office editor bridge did not load.');
             setStatus('open:start ' + (data.fileType || 'docx'));
-            debugLog('open:start', data.fileName || 'Document.docx', data.fileType || 'docx', 'isNew=' + !!data.isNew, 'base64=' + String(data.data_base64 || '').length);
+            debugLog('open:start', {
+                fileName: data.fileName || 'Document.docx',
+                fileType: data.fileType || 'docx',
+                isNew: !!data.isNew,
+                base64Length: String(data.data_base64 || '').length,
+                lang: data.lang || 'en'
+            });
             setEditorLoading(true);
             if (editor && typeof editor.destroy === 'function') {
                 editor.destroy();

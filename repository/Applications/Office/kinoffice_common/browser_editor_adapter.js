@@ -1,11 +1,12 @@
 (function() {
     'use strict';
 
-    var BUILD_ID = '20260603-cache10';
+    var BUILD_ID = '20260604-cache16';
     var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js?kinOfficeBuild=' + BUILD_ID;
     var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js?kinOfficeBuild=' + BUILD_ID;
     var apiPromise = null;
     var x2tPromise = null;
+    var cachePurgePromise = null;
     var workingDirsReady = false;
     var DEBUG_PREFIX = '[KinOfficeBrowser ' + BUILD_ID + ']';
 
@@ -42,13 +43,51 @@
         });
     }
 
+    function purgeEuroOfficeBrowserCaches() {
+        if (cachePurgePromise) return cachePurgePromise;
+        cachePurgePromise = Promise.all([
+            (navigator.serviceWorker && navigator.serviceWorker.getRegistrations
+                ? navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    return Promise.all(registrations.map(function(registration) {
+                        var scope = String(registration && registration.scope || '');
+                        if (scope.indexOf('/repository/kinoffice_common/vendor/kin-office/') === -1) {
+                            return false;
+                        }
+                        debugLog('unregister service worker', scope);
+                        return registration.unregister();
+                    }));
+                }).catch(function(error) {
+                    debugLog('service worker purge failed', error && error.message ? error.message : String(error));
+                })
+                : Promise.resolve()),
+            (window.caches && window.caches.keys
+                ? window.caches.keys().then(function(keys) {
+                    return Promise.all(keys.map(function(key) {
+                        if (!/^document_editor_(static|dynamic)_/.test(String(key))) {
+                            return false;
+                        }
+                        debugLog('delete editor cache', key);
+                        return window.caches.delete(key);
+                    }));
+                }).catch(function(error) {
+                    debugLog('cache purge failed', error && error.message ? error.message : String(error));
+                })
+                : Promise.resolve())
+        ]).then(function() {
+            debugLog('editor cache purge complete');
+        });
+        return cachePurgePromise;
+    }
+
     function loadApi() {
         if (window.DocsAPI && window.DocsAPI.DocEditor) {
             installFontDiagnostics();
             return Promise.resolve();
         }
         if (!apiPromise) {
-            apiPromise = loadScript(API_URL).then(function() {
+            apiPromise = purgeEuroOfficeBrowserCaches().then(function() {
+                return loadScript(API_URL);
+            }).then(function() {
                 if (!window.DocsAPI || !window.DocsAPI.DocEditor) {
                     throw new Error('Kin Office browser SDK loaded without DocsAPI.DocEditor.');
                 }
@@ -68,6 +107,15 @@
             bytes.push(('0' + data[i].toString(16)).slice(-2));
         }
         return bytes.join(' ');
+    }
+
+    function streamHeaderMagic(stream) {
+        var header = streamHeader(stream);
+        if (!header) return { header: null, valid: false, kind: 'missing' };
+        if (header.indexOf('00 01 00 00') === 0) return { header: header, valid: true, kind: 'ttf' };
+        if (header.indexOf('4f 54 54 4f') === 0) return { header: header, valid: true, kind: 'otto' };
+        if (header.indexOf('74 74 63 66') === 0) return { header: header, valid: true, kind: 'ttc' };
+        return { header: header, valid: false, kind: 'unknown' };
     }
 
     function describeFontInfo(name) {
@@ -552,6 +600,13 @@
         var fileName = String(opts.fileName || 'Document.docx');
         var fileType = String(opts.fileType || fileName.split('.').pop() || 'docx').replace(/^\./, '').toLowerCase();
         var containerId = String(opts.containerId || 'editor');
+        debugLog('createInstance:start', {
+            fileName: fileName,
+            fileType: fileType,
+            isNew: !!opts.isNew,
+            bytes: opts.bytes && opts.bytes.length,
+            lang: opts.lang || 'en-US'
+        });
         var sourcePromise = opts.isNew
             ? Promise.resolve({ bin: bytesForNewDocument(fileType), media: {} })
             : convertDocumentToBin(opts.bytes, fileName, fileType);
@@ -605,7 +660,7 @@
             editor = new window.DocsAPI.DocEditor(containerId, {
                 documentType: documentTypeFor(fileType),
                 editorConfig: {
-                    lang: opts.lang || 'en',
+                    lang: opts.lang || 'en-US',
                     mode: 'edit',
                     canSaveDocumentToBinary: true,
                     user: {
@@ -621,6 +676,7 @@
                             name: 'Arial',
                             size: '11px'
                         },
+                        locale: 'en-US',
                         forceWesternFontSize: true,
                         autosave: false,
                         forcesave: false,

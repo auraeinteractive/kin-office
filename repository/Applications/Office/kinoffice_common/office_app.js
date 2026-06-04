@@ -110,7 +110,7 @@ export function bootstrapKinOfficeApp(config) {
 
     const iframeEl = ensureKinOfficeIframeShell();
     const ORIGIN = window.location.origin;
-    const KIN_OFFICE_BUILD_ID = '20260603-cache10';
+    const KIN_OFFICE_BUILD_ID = '20260604-cache16';
     const LOCAL_EDITOR_URL = new URL('./browser_editor.html?kinOfficeBuild=' + KIN_OFFICE_BUILD_ID, import.meta.url).href;
     const params = new URLSearchParams(window.location.search);
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
@@ -137,7 +137,11 @@ export function bootstrapKinOfficeApp(config) {
         console.log.apply(console, ['[' + appConfig.appTag + ']'].concat(Array.prototype.slice.call(arguments)));
     }
 
-    log('bootstrap', KIN_OFFICE_BUILD_ID, window.location.href);
+    log('bootstrap', KIN_OFFICE_BUILD_ID, window.location.href, {
+        kinOpenPath,
+        debugDefaultDocumentUrl: appConfig.debugDefaultDocumentUrl || '',
+        debugForceDefaultDocument: !!appConfig.debugForceDefaultDocument
+    });
 
     function postToParent(message) {
         try {
@@ -348,6 +352,28 @@ export function bootstrapKinOfficeApp(config) {
         return bytes;
     }
 
+    async function loadDebugDefaultDocumentBytes() {
+        if (!appConfig.debugDefaultDocumentUrl) return null;
+        const url = new URL(appConfig.debugDefaultDocumentUrl, import.meta.url).href;
+        log('loadDebugDefaultDocumentBytes:start', url, {
+            configured: appConfig.debugDefaultDocumentUrl,
+            importMetaUrl: import.meta.url
+        });
+        const response = await fetch(url, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store'
+        });
+        log('loadDebugDefaultDocumentBytes:response', response.status, response.url);
+        if (!response.ok) {
+            throw new Error('Could not load Kin Office debug document: HTTP ' + response.status);
+        }
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        validateOfficeBytes(bytes);
+        log('loadDebugDefaultDocumentBytes:done', bytes.length);
+        return bytes;
+    }
+
     function ensureEditorShell() {
         if (shellReady) return Promise.resolve();
         if (shellReadyPromise) return shellReadyPromise;
@@ -370,7 +396,13 @@ export function bootstrapKinOfficeApp(config) {
 
     async function openLocalDocument(options) {
         const session = createDocumentSession(options || {});
-        log('openLocalDocument:start', session.fileName, session.fileType, 'isNew=' + session.isNew, 'bytes=' + (session.bytes ? session.bytes.length : 0));
+        log('openLocalDocument:start', {
+            fileName: session.fileName,
+            fileType: session.fileType,
+            isNew: session.isNew,
+            bytes: session.bytes ? session.bytes.length : 0,
+            kinPath: session.kinPath || ''
+        });
         await ensureEditorShell();
         currentSession = session;
         currentFilename = session.fileName;
@@ -395,9 +427,15 @@ export function bootstrapKinOfficeApp(config) {
             fileType: currentFileType,
             isNew: session.isNew,
             data_base64: session.bytes ? bytesToBase64(session.bytes) : '',
-            lang: 'en'
+            lang: 'en-US'
         });
-        log('openLocalDocument:posted', reqId);
+        log('openLocalDocument:posted', {
+            requestId: reqId,
+            fileName: currentFilename,
+            fileType: currentFileType,
+            isNew: session.isNew,
+            base64Length: session.bytes ? bytesToBase64(session.bytes).length : 0
+        });
         try {
             await opened;
             editorOpen = true;
@@ -476,11 +514,37 @@ export function bootstrapKinOfficeApp(config) {
     async function openBlankDocument() {
         currentKinPath = null;
         currentDirty = false;
+        const debugBytes = await loadDebugDefaultDocumentBytes();
+        if (debugBytes) {
+            await openLocalDocument({
+                fileName: appConfig.debugDefaultFilename || appConfig.defaultFilename,
+                fileType: appConfig.fileType,
+                bytes: debugBytes,
+                isNew: false
+            });
+            return;
+        }
         await openLocalDocument({
             fileName: appConfig.defaultFilename,
             fileType: appConfig.fileType,
             isNew: true
         });
+    }
+
+    async function openInitialDocument() {
+        if (appConfig.debugForceDefaultDocument) {
+            log('openInitialDocument:forcing debug default', {
+                debugDefaultDocumentUrl: appConfig.debugDefaultDocumentUrl || '',
+                ignoredKinOpenPath: kinOpenPath || ''
+            });
+            await openBlankDocument();
+            return;
+        }
+        if (kinOpenPath) {
+            await openKinPath(kinOpenPath);
+            return;
+        }
+        await openBlankDocument();
     }
 
     async function handleMenuCommand(command) {
@@ -575,7 +639,7 @@ export function bootstrapKinOfficeApp(config) {
     });
 
     registerMenus();
-    (kinOpenPath ? openKinPath(kinOpenPath) : openBlankDocument()).catch(function(error) {
+    openInitialDocument().catch(function(error) {
         openAlert('Could not open document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
     });
 }

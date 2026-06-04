@@ -19,9 +19,9 @@ The current implementation deliberately uses a browser-owned open/export path:
 4. Euro-Office edits in desktop-flavored browser mode.
 5. Kin-owned save hooks serialize editor state, convert back to OOXML bytes, and write through Kin file APIs.
 
-## Known Caveat
+## Font Note
 
-Fonts are still an active issue. Euro-Office canvas text is not rendered with normal HTML/CSS fonts; it uses its own font registry and font loader. The current generated font pack maps CJK aliases such as `等线`, `DengXian`, `Microsoft YaHei`, and `SimSun` to `DroidSansFallbackFull.ttf` and writes ODTTF-obfuscated font files, but user testing still reports square/tofu boxes in some app text. Future work must debug the Euro-Office font engine and generated `AllFonts.js`/font files, not browser CSS.
+Euro-Office canvas text is not rendered with normal HTML/CSS fonts; it uses its own font registry and font loader. Earlier cache11–cache16 work addressed CJK alias mapping, debug DOCX loading, and stale inner-editor caches; see [Euro-Office Browser Runtime: Fonts](euro-office-browser-runtime.md#fonts).
 
 ## Non-Goals
 

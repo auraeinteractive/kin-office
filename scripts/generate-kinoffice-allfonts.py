@@ -39,12 +39,18 @@ _ODTTF_KEY = bytes(
 # font engine can list WOFF files but does not reliably render glyphs from them.
 LOCAL_FONT_FAMILIES = [
     {
-        "name": "Droid Sans Fallback",
+        "name": "Noto Sans CJK SC",
         "paths": {
-            "regular": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            "bold": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            "italic": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-            "bold_italic": "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+            "regular": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "bold": "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "italic": "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "bold_italic": "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        },
+        "face_indexes": {
+            "regular": 2,
+            "bold": 2,
+            "italic": 2,
+            "bold_italic": 2,
         },
         "aliases": [
             "Arial Unicode MS",
@@ -370,10 +376,15 @@ def main() -> int:
             ital = add_url(variants["italic"])
             bold_ital = add_url(variants["bold_italic"])
 
-        entry = [family["name"], reg, 0, ital, 0, bold, 0, bold_ital, 0]
+        face_indexes = family.get("face_indexes") or {}
+        reg_face = int(face_indexes.get("regular", 0))
+        bold_face = int(face_indexes.get("bold", 0))
+        ital_face = int(face_indexes.get("italic", 0))
+        bold_ital_face = int(face_indexes.get("bold_italic", 0))
+        entry = [family["name"], reg, reg_face, ital, ital_face, bold, bold_face, bold_ital, bold_ital_face]
         font_infos.append(entry)
         for alias in family.get("aliases", []):
-            font_infos.append([alias, reg, 0, ital, 0, bold, 0, bold_ital, 0])
+            font_infos.append([alias, reg, reg_face, ital, ital_face, bold, bold_face, bold_ital, bold_ital_face])
 
     write_allfonts_js(font_files, font_infos)
     print(f"Wrote {ALLFONTS_JS} ({len(font_files)} font files, {len(font_infos)} families)")

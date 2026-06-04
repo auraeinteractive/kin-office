@@ -7,7 +7,7 @@ import sys
 
 SAVE_HOOK = "(window.KinOfficeDirectSave && window.KinOfficeDirectSave())"
 UPSTREAM_PRODUCT_TOKEN = "ONLY" + "OFFICE"
-KIN_OFFICE_BUILD_ID = "20260603-cache10"
+KIN_OFFICE_BUILD_ID = "20260604-cache16"
 
 
 REPLACEMENTS = {
@@ -23,6 +23,9 @@ REPLACEMENTS = {
     "../../../../sdkjs/source-loader/word.js": "../../../../sdkjs/word/sdk-all-min.js",
     "../../../../sdkjs/source-loader/cell.js": "../../../../sdkjs/cell/sdk-all-min.js",
     "../../../../sdkjs/source-loader/slide.js": "../../../../sdkjs/slide/sdk-all-min.js",
+    "../../sdkjs/word/sdk-all": "../../sdkjs/word/sdk-all-min",
+    "../../sdkjs/cell/sdk-all": "../../sdkjs/cell/sdk-all-min",
+    "../../sdkjs/slide/sdk-all": "../../sdkjs/slide/sdk-all-min",
 }
 
 EDITOR_SDK_ALIASES = {
@@ -110,6 +113,13 @@ def patch_file(path: Path) -> int:
         "urlArgs:\"kinOfficeBuild=20260603-cache7\",",
         "urlArgs:\"kinOfficeBuild=20260603-cache8\",",
         "urlArgs:\"kinOfficeBuild=20260603-cache9\",",
+        "urlArgs:\"kinOfficeBuild=20260603-cache10\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache11\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache12\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache13\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache14\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache15\",",
+        "urlArgs:\"kinOfficeBuild=20260604-cache17\",",
     ]
     for previous in previous_url_args:
         text = text.replace(previous, f"urlArgs:\"kinOfficeBuild={KIN_OFFICE_BUILD_ID}\",")
@@ -129,6 +139,22 @@ def patch_file(path: Path) -> int:
     text = text.replace(
         "imgidx:t.asc_getFontThumbnail()",
         "imgidx:-1",
+    )
+    text = text.replace(
+        'var params = "?_dc=0";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
+    )
+    text = text.replace(
+        'var params = "?_dc=20260604-cache14";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
+    )
+    text = text.replace(
+        'var params = "?_dc=20260604-cache15";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
+    )
+    text = text.replace(
+        'var params = "?_dc=20260604-cache17";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
     )
     text = text.replace(
         's=Math.floor(i.store.at(n).get("imgidx")/r);var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)',

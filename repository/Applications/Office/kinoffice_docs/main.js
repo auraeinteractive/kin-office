@@ -1,4 +1,7 @@
 ( function() {
+    var BUILD_ID = '20260604-cache16';
+    var DOCS_ENTRY = 'app_debug_20260604_cache16.js';
+
     function qp( name ) {
         try {
             return new URLSearchParams( location.search ).get( name ) || '';
@@ -16,8 +19,14 @@
         var openPath = qp( 'kin_open_path' ) || qp( 'path' );
         if( openPath ) q.kin_open_path = openPath;
         q.kinoffice_mode = qp( 'kinoffice_mode' ) || 'local';
+        q.kinOfficeBuild = BUILD_ID;
+        console.log( 'kinoffice_docs launcher', BUILD_ID, {
+            packageId: pkg,
+            entry: DOCS_ENTRY,
+            query: q
+        } );
         new kin.classes.Window( {
-            entry: 'app.js',
+            entry: DOCS_ENTRY,
             packageId: pkg,
             title: 'Docs',
             width: 1024,

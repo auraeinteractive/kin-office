@@ -236,14 +236,38 @@ Manual test order:
 
 ## Known Issues and Work Items
 
-Fonts remain unresolved. The current cache10 implementation generates ODTTF-obfuscated local font files and maps CJK aliases to a CJK-capable TTF, but user testing still shows square/tofu glyphs in editor canvas text.
+The `20260604-cache11` font-catalog attempt did not fix the visible issue. It mapped CJK aliases such as `等线` to the Simplified Chinese face in `NotoSansCJK-*.ttc` because the earlier `DroidSansFallbackFull.ttf` mapping had CJK coverage but no normal Latin alphabet coverage. User testing reported no change after deployment, so do not repeat this as the primary fix without new evidence.
 
-Likely next debugging areas:
+`20260604-cache12` tried to change the debug strategy by making Docs open `kinoffice_common/debug/test.docx` as its default document. User testing still showed `Document.docx`, a blank page, Chinese default font, and tofu boxes, so the debug DOCX did not actually become the opened session.
+
+`20260604-cache13` removes the bottom-left build overlay, routes those messages to `console.log`, and forces the Docs debug default even when Kin passes a `path` or `kin_open_path` query parameter. Console logs should show launch query data, debug DOCX fetch URL/status/byte count, posted open payload, and adapter `createInstance` options.
+
+User testing after `cache13` still showed the same visual result, but the console changed the diagnosis: the outer Docs app was still `office_app.js?kinOfficeBuild=20260604-cache11`, opened `Document.docx`, and posted `isNew=true` with `bytes=0`. The debug DOCX had still not actually entered the session.
+
+`20260604-cache14` changes the Docs launcher to open a fresh wrapper filename, `app_debug_20260604_cache14.js`, and logs `kinoffice_docs launcher` with the requested entry and query. This is specifically to bypass stale caching of `kinoffice_docs/app.js`.
+
+After the next test, the user clarified the visible boxes were typed into the still-blank document; `test.docx` had not rendered. The console still showed `kin_repo_entry=app.js` and no `kinoffice_docs launcher` log, so the running Kin workspace was still using stale `kinoffice_docs` app metadata. The Docs manifest is now version `21` and points directly at `app_debug_20260604_cache14.js`; reload Kin workspace/app metadata before interpreting another visual test.
+
+Kin loads direct manifest entries as classic scripts. The first `app_debug_20260604_cache14.js` direct-entry attempt failed with `Cannot use import statement outside a module`; the debug wrapper and fallback `app.js` now use dynamic `import()` to load `office_app.js`.
+
+The same console run showed `sdkjs/common/Images/fonts_thumbnail.png.bin` returning 404. `scripts/generate-kinoffice-font-thumbnail-bins.py` generates transparent fallback sprite binaries so the font combobox no longer parses a 404 body as sprite data. This is a font-preview/runtime-validity fix, not proof that document canvas text is fixed.
+
+After the debug DOCX loaded successfully, boxes remained. The console still showed inner editor stack frames from `sdk-all-min.js?kinOfficeBuild=20260604-cache11`; Euro-Office `api.js` hardcoded the inner iframe query as `?_dc=0`. `20260604-cache15` patches that API-generated iframe query to `?_dc=<cache id>` and moves the manifest to a cache15-named debug wrapper.
+
+User testing after `cache15` proved the test DOCX path had finally taken effect: the title became `Debug Arial Test.docx`, the toolbar showed Arial, and the known document content appeared, but still as boxes. The same console run still referenced cache11 `sdk-all-min.js`, so `20260604-cache16` now purges Euro-Office service-worker registrations and Cache Storage entries named `document_editor_static_*` / `document_editor_dynamic_*` before loading the API. This is a cache/runtime diagnosis, not another attempt to fix `AllFonts.js`.
+
+If `cache16` still renders boxes after the console shows current cache16 inner editor scripts, the next debugging layer is the actual inner editor font engine: `AscFonts`, loaded font streams, decoded headers, and selected face indexes.
+
+The debug file comes from `assets/test.docx`, uses Arial, and contains readable English text. The result should split the problem:
+
+- If `test.docx` renders correctly, focus on blank templates and internal-bin defaults.
+- If `test.docx` still renders as boxes, focus on x2t conversion, text encoding in the internal document, or whether Euro-Office canvas is actually receiving usable font streams.
+
+Useful future debugging checks:
 
 - Confirm `AscFonts.g_map_font_index` maps requested family names to the expected font indexes.
-- Confirm every loaded font file decodes to a valid TTF/OTF stream after Euro-Office's XOR decode.
+- Confirm every loaded font file decodes to a valid TTF/OTF/TTC stream after Euro-Office's XOR decode.
 - Confirm the engine is selecting the expected family/face for placeholder/document text.
-- Consider switching CJK aliases from `DroidSansFallbackFull.ttf` to the correct face of `NotoSansCJK-Regular.ttc` if the engine handles TTC face indexes correctly.
 - Ensure English blank templates are actually English if user-visible default placeholders should not be Chinese.
 
 Do not try to solve document canvas tofu by editing CSS; it is a Euro-Office font-engine issue.
