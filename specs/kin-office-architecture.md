@@ -174,6 +174,7 @@ Files at or above that threshold use chunked upload.
 Save/export details:
 
 - Patched Euro-Office UI routes toolbar save and keyboard save to `window.KinOfficeDirectSave`; the adapter also overrides `api.asc_Save()` as a fallback.
+- The adapter also installs a capture-phase `Ctrl+S` / `Cmd+S` listener inside Euro-Office's inner editor iframe so keyboard save always posts the same Kin `saveRequested` event as the save icon.
 - The adapter tries `api.getFileAsFromChanges()`, then `api.asc_nativeGetFile3()`, then `api.asc_nativeGetFileData()` with a temporary `native.Save_End` capture.
 - Native serializers may return either a complete `DOCY/XLSY/PPTY` payload or raw data plus a header. Complete internal payloads are passed through unchanged; raw data is wrapped with the correct header before x2t export.
 - Upstream `downloadAs()` and server callbacks are not used for Kin persistence.

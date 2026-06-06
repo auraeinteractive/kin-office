@@ -740,9 +740,34 @@
         };
     }
 
+    function installInnerSaveShortcutHook(fileType, onSaveRequested) {
+        if (typeof onSaveRequested !== 'function') return;
+        var inner = getInnerWindow();
+        if (!inner || !inner.document || inner._kinSaveShortcutInstalled) return;
+        inner._kinSaveShortcutInstalled = true;
+        inner._kinLastSaveShortcutAt = 0;
+
+        function onKeydown(event) {
+            var key = String(event && event.key || '').toLowerCase();
+            if (!(event && (event.ctrlKey || event.metaKey) && key === 's')) return;
+            try { event.preventDefault(); } catch (_error) {}
+            try { event.stopPropagation(); } catch (_error) {}
+            try { event.stopImmediatePropagation(); } catch (_error) {}
+
+            var now = Date.now();
+            if (now - inner._kinLastSaveShortcutAt < 500) return;
+            inner._kinLastSaveShortcutAt = now;
+            onSaveRequested();
+        }
+
+        inner.document.addEventListener('keydown', onKeydown, true);
+        inner.addEventListener('keydown', onKeydown, true);
+    }
+
     function installDirectSaveHookSoon(fileType, onSaveRequested, onError, attemptsLeft) {
         try {
             installDirectSaveHook(fileType, onSaveRequested);
+            installInnerSaveShortcutHook(fileType, onSaveRequested);
         } catch (error) {
             if ((attemptsLeft || 0) <= 0) {
                 if (onError) onError(error);
