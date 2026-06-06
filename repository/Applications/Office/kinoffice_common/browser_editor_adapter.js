@@ -640,6 +640,46 @@
         return main;
     }
 
+    function getEditorApp(fileType) {
+        var inner = getInnerWindow();
+        return fileType === 'xlsx' ? inner.SSE : (fileType === 'pptx' ? inner.PE : inner.DE);
+    }
+
+    function findStatusLabel(inner, fileType) {
+        if (!inner || !inner.document) return null;
+        if (fileType === 'pptx') {
+            return inner.document.querySelector('.status-group #status-label-action') ||
+                inner.document.querySelector('#status-label-action');
+        }
+        return inner.document.querySelector('.status-group #label-action') ||
+            inner.document.querySelector('#label-action') ||
+            inner.document.querySelector('.status-group [data-layout-name="statusBar-actionStatus"]');
+    }
+
+    function setInnerStatusMessage(fileType, message, options) {
+        var opts = options || {};
+        var text = String(message || '');
+        var delay = Number(opts.delay || 0);
+        var force = opts.force !== false;
+        try {
+            var app = getEditorApp(fileType);
+            var controller = app && typeof app.getController === 'function' ? app.getController('Statusbar') : null;
+            if (controller && typeof controller.setStatusCaption === 'function') {
+                controller.setStatusCaption(text, force, delay);
+                return true;
+            }
+        } catch (_error) {}
+        try {
+            var inner = getInnerWindow();
+            var label = findStatusLabel(inner, fileType);
+            if (label) {
+                label.textContent = text;
+                return true;
+            }
+        } catch (_error) {}
+        return false;
+    }
+
     function serializeViaNativeFileData(api, fileType) {
         if (!api || typeof api.asc_nativeGetFileData !== 'function') return null;
         var inner = getInnerWindow();
@@ -978,6 +1018,9 @@
                 },
                 forceSaveComplete: function(success, message) {
                     this.processSaveResult(success !== false, message || '');
+                },
+                setStatusMessage: function(message, options) {
+                    setInnerStatusMessage(fileType, message, options || {});
                 },
                 exportDocument: function() {
                     return new Promise(function(resolve, reject) {

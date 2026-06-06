@@ -161,6 +161,8 @@ Normal Save and Autosave do not full-overwrite the target file. They use an OOXM
 
 Autosave is debounced and uses the same patch backend as Save. If Autosave conflicts or fails, it does not alter the target file; it best-effort writes a same-directory recovery copy named like `.~autosave-<timestamp>-<filename>` and pauses Autosave for that document.
 
+Kin Office save/autosave status messages are posted through `browser_editor.html` to `browser_editor_adapter.js`, which writes them into Euro-Office's own statusbar action label inside the existing `.status-group` element. The adapter prefers the editor's `Statusbar.setStatusCaption(...)` controller API and falls back to the DOM action label (`#label-action` for Docs/Sheets, `#status-label-action` for Slides) if needed.
+
 Current write threshold:
 
 ```text

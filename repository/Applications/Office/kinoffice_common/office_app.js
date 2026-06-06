@@ -307,6 +307,24 @@ export function bootstrapKinOfficeApp(config) {
         iframeEl.contentWindow.postMessage(Object.assign({ type: 'kinOfficeEditorCommand' }, message || {}), ORIGIN);
     }
 
+    function statusTime() {
+        try {
+            return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        } catch (_error) {
+            const now = new Date();
+            return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        }
+    }
+
+    function setEditorStatus(message, options) {
+        try {
+            postToEditor(Object.assign({
+                command: 'statusMessage',
+                message: String(message || '')
+            }, options || {}));
+        } catch (_error) {}
+    }
+
     function sendSaveResult(success, message) {
         try {
             postToEditor({ command: 'saveResult', success: success !== false, message: message || '' });
@@ -525,10 +543,12 @@ export function bootstrapKinOfficeApp(config) {
 
     async function writeAutosaveRecovery(bytes) {
         const recoveryPath = autosaveRecoveryPath();
-        if (!recoveryPath) return;
+        if (!recoveryPath) return false;
         try {
             await writeKinFileBytesSafe(recoveryPath, bytes);
+            return true;
         } catch (_error) {}
+        return false;
     }
 
     async function applyKinOfficePatch(targetPath, fileType, baseSha256, targetSha256, patchBytes, reason) {
@@ -584,16 +604,26 @@ export function bootstrapKinOfficeApp(config) {
     async function runAutosave() {
         if (autosaveInFlight || saveInFlight || !editorOpen || !currentDirty || !currentKinPath || autosavePaused) return;
         autosaveInFlight = true;
+        setEditorStatus('Autosaving...', { force: true });
         try {
             const result = await patchCurrentDocument('autosave');
             lastAutosaveAt = Date.now();
-            if (!result.skipped) sendSaveResult(true, 'Autosaved');
+            if (!result.skipped) {
+                const message = 'Autosaved ' + statusTime();
+                setEditorStatus(message, { force: true, delay: 3000 });
+                sendSaveResult(true, message);
+            }
         } catch (error) {
             autosavePaused = true;
+            let recoverySaved = false;
             try {
                 const exported = await exportLocalDocument();
-                if (exported && exported.bytes) await writeAutosaveRecovery(exported.bytes);
+                if (exported && exported.bytes) recoverySaved = await writeAutosaveRecovery(exported.bytes);
             } catch (_recoveryError) {}
+            const message = recoverySaved
+                ? 'Autosave paused. Recovery saved.'
+                : 'Autosave failed. Use Save As now.';
+            setEditorStatus(message, { force: true });
             console.warn('[KinOffice] Autosave paused:', error && error.message ? error.message : error);
         } finally {
             autosaveInFlight = false;
@@ -674,6 +704,7 @@ export function bootstrapKinOfficeApp(config) {
         try {
             await opened;
             editorOpen = true;
+            setEditorStatus('Ready', { force: true, delay: 2000 });
         } catch (error) {
             if (currentSession === session) currentSession = null;
             throw error;
@@ -708,10 +739,14 @@ export function bootstrapKinOfficeApp(config) {
             if (!editorOpen) throw new Error('Open a document first, then use Save.');
             if (!opts.forceSaveAs && currentKinPath) {
                 clearAutosaveTimer();
+                setEditorStatus('Saving...', { force: true });
                 await patchCurrentDocument('manual-save');
-                sendSaveResult(true, '');
+                const message = 'Saved ' + statusTime();
+                setEditorStatus(message, { force: true, delay: 3000 });
+                sendSaveResult(true, message);
                 return;
             }
+            setEditorStatus('Saving...', { force: true });
             const targetPath = await chooseSavePath(currentKinPath ? kinPathBaseName(currentKinPath) : currentFilename);
             const exported = await exportLocalDocument();
             const bytes = exported.bytes;
@@ -724,14 +759,18 @@ export function bootstrapKinOfficeApp(config) {
             currentDirty = false;
             autosavePaused = false;
             lastAutosaveAt = Date.now();
-            sendSaveResult(true, '');
+            const message = 'Saved ' + statusTime();
+            setEditorStatus(message, { force: true, delay: 3000 });
+            sendSaveResult(true, message);
             postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
         })();
         try {
             await saveInFlight;
         } catch (error) {
             if (!error || error.message !== 'cancel') {
-                sendSaveResult(false, error && error.message ? error.message : String(error));
+                const message = error && error.message ? error.message : String(error);
+                setEditorStatus('Save failed: ' + message, { force: true });
+                sendSaveResult(false, message);
             }
             throw error;
         } finally {
@@ -823,6 +862,7 @@ export function bootstrapKinOfficeApp(config) {
         if (data.event === 'documentStateChange') {
             currentDirty = !!data.changed;
             if (currentDirty) {
+                setEditorStatus(currentKinPath ? 'Unsaved changes' : 'Save As required before autosave', { force: true });
                 scheduleAutosave();
             } else {
                 clearAutosaveTimer();

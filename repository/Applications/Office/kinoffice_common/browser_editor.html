@@ -111,6 +111,13 @@
             }
             if (data.command === 'saveResult' && editor && typeof editor.processSaveResult === 'function') {
                 editor.processSaveResult(data.success !== false, data.message || '');
+                return;
+            }
+            if (data.command === 'statusMessage' && editor && typeof editor.setStatusMessage === 'function') {
+                editor.setStatusMessage(data.message || '', {
+                    force: data.force !== false,
+                    delay: Number(data.delay || 0)
+                });
             }
         });
 
