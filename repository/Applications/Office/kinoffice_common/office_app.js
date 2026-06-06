@@ -26,6 +26,8 @@ function requestId(prefix) {
 }
 
 const KIN_WRITE_UPLOAD_THRESHOLD = 16 * 1024;
+const KIN_AUTOSAVE_IDLE_MS = 12000;
+const KIN_AUTOSAVE_MIN_INTERVAL_MS = 30000;
 const OFFICE_MIME_TYPES = {
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -49,6 +51,154 @@ function bytesToBase64(bytes) {
         binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
     }
     return btoa(binary);
+}
+
+function bytesEqual(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
+async function sha256Hex(bytes) {
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest)).map(function(v) {
+        return v.toString(16).padStart(2, '0');
+    }).join('');
+}
+
+function readAscii(bytes, offset, len) {
+    let out = '';
+    for (let i = 0; i < len; i += 1) out += String.fromCharCode(bytes[offset + i]);
+    return out;
+}
+
+function parseOfficeZipEntries(bytes) {
+    if (!bytes || bytes.length < 22 || !isZipLocalHeader(bytes)) throw new Error('Invalid Office ZIP');
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let eocd = -1;
+    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i -= 1) {
+        if (view.getUint32(i, true) === 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    }
+    if (eocd < 0) throw new Error('Office ZIP central directory not found');
+    const count = view.getUint16(eocd + 10, true);
+    const cdOffset = view.getUint32(eocd + 16, true);
+    const entries = new Map();
+    let pos = cdOffset;
+    const decoder = new TextDecoder();
+    for (let i = 0; i < count; i += 1) {
+        if (pos + 46 > bytes.length || view.getUint32(pos, true) !== 0x02014b50) {
+            throw new Error('Invalid Office ZIP central directory entry');
+        }
+        const flags = view.getUint16(pos + 8, true);
+        const method = view.getUint16(pos + 10, true);
+        const modTime = view.getUint16(pos + 12, true);
+        const modDate = view.getUint16(pos + 14, true);
+        const crc32 = view.getUint32(pos + 16, true);
+        const compressedSize = view.getUint32(pos + 20, true);
+        const uncompressedSize = view.getUint32(pos + 24, true);
+        const nameLen = view.getUint16(pos + 28, true);
+        const extraLen = view.getUint16(pos + 30, true);
+        const commentLen = view.getUint16(pos + 32, true);
+        const localOffset = view.getUint32(pos + 42, true);
+        const nameBytes = bytes.subarray(pos + 46, pos + 46 + nameLen);
+        const name = (flags & 0x0800) ? decoder.decode(nameBytes) : readAscii(nameBytes, 0, nameBytes.length);
+        if (localOffset + 30 > bytes.length || view.getUint32(localOffset, true) !== 0x04034b50) {
+            throw new Error('Invalid Office ZIP local header');
+        }
+        const localNameLen = view.getUint16(localOffset + 26, true);
+        const localExtraLen = view.getUint16(localOffset + 28, true);
+        const dataOffset = localOffset + 30 + localNameLen + localExtraLen;
+        const dataEnd = dataOffset + compressedSize;
+        if (dataEnd > bytes.length) throw new Error('Invalid Office ZIP member size');
+        entries.set(name, {
+            path: name,
+            method,
+            flags,
+            modTime,
+            modDate,
+            crc32,
+            compressedSize,
+            uncompressedSize,
+            data: bytes.subarray(dataOffset, dataEnd)
+        });
+        pos += 46 + nameLen + extraLen + commentLen;
+    }
+    return entries;
+}
+
+function zipEntrySame(a, b) {
+    return !!a && !!b &&
+        a.method === b.method &&
+        a.crc32 === b.crc32 &&
+        a.compressedSize === b.compressedSize &&
+        a.uncompressedSize === b.uncompressedSize &&
+        bytesEqual(a.data, b.data);
+}
+
+function patchMetaSame(a, b) {
+    return !!a && !!b &&
+        a.method === b.method &&
+        a.crc32 === b.crc32 &&
+        a.compressedSize === b.compressedSize &&
+        a.uncompressedSize === b.uncompressedSize;
+}
+
+function setU64(view, offset, value) {
+    const n = BigInt(value || 0);
+    view.setUint32(offset, Number(n & 0xffffffffn), true);
+    view.setUint32(offset + 4, Number((n >> 32n) & 0xffffffffn), true);
+}
+
+function createOfficePackagePatchBytes(baseBytes, targetBytes) {
+    const baseEntries = parseOfficeZipEntries(baseBytes);
+    const targetEntries = parseOfficeZipEntries(targetBytes);
+    const encoder = new TextEncoder();
+    const changes = [];
+    targetEntries.forEach(function(target, path) {
+        const base = baseEntries.get(path);
+        if (zipEntrySame(base, target)) return;
+        changes.push({ op: 1, path, base: base || null, target });
+    });
+    baseEntries.forEach(function(base, path) {
+        if (targetEntries.has(path)) return;
+        changes.push({ op: 2, path, base, target: null });
+    });
+    let total = 8;
+    const encoded = changes.map(function(change) {
+        const pathBytes = encoder.encode(change.path);
+        const data = change.target ? change.target.data : new Uint8Array(0);
+        total += 1 + 2 + 2 + 4 + 8 + 8 + 2 + 4 + 8 + 8 + 8 + pathBytes.length + data.length;
+        return { change, pathBytes, data };
+    });
+    const out = new Uint8Array(total);
+    const view = new DataView(out.buffer);
+    out.set([0x4b, 0x4f, 0x50, 0x31], 0); // KOP1
+    view.setUint32(4, changes.length, true);
+    let off = 8;
+    encoded.forEach(function(item) {
+        const change = item.change;
+        const base = change.base;
+        const target = change.target;
+        out[off] = change.op; off += 1;
+        view.setUint16(off, item.pathBytes.length, true); off += 2;
+        view.setUint16(off, target ? target.method : 0, true); off += 2;
+        view.setUint32(off, target ? target.crc32 : 0, true); off += 4;
+        setU64(view, off, target ? target.compressedSize : 0); off += 8;
+        setU64(view, off, target ? target.uncompressedSize : 0); off += 8;
+        view.setUint16(off, base ? base.method : 0xffff, true); off += 2;
+        view.setUint32(off, base ? base.crc32 : 0, true); off += 4;
+        setU64(view, off, base ? base.compressedSize : 0xffffffffffffffffn); off += 8;
+        setU64(view, off, base ? base.uncompressedSize : 0xffffffffffffffffn); off += 8;
+        setU64(view, off, item.data.length); off += 8;
+        out.set(item.pathBytes, off); off += item.pathBytes.length;
+        out.set(item.data, off); off += item.data.length;
+    });
+    return out;
 }
 
 function base64ToBytes(base64) {
@@ -138,6 +288,12 @@ export function bootstrapKinOfficeApp(config) {
     let pendingOpen = null;
     let currentDirty = false;
     let currentSession = null;
+    let currentBaselineBytes = null;
+    let currentBaselineSha256 = '';
+    let autosaveTimer = null;
+    let autosaveInFlight = false;
+    let autosavePaused = false;
+    let lastAutosaveAt = 0;
     const pendingExports = new Map();
 
     function postToParent(message) {
@@ -347,6 +503,104 @@ export function bootstrapKinOfficeApp(config) {
         }
     }
 
+    async function updateBaseline(bytes) {
+        currentBaselineBytes = bytes ? new Uint8Array(bytes) : null;
+        currentBaselineSha256 = currentBaselineBytes ? await sha256Hex(currentBaselineBytes) : '';
+    }
+
+    function clearAutosaveTimer() {
+        if (autosaveTimer) clearTimeout(autosaveTimer);
+        autosaveTimer = null;
+    }
+
+    function autosaveRecoveryPath() {
+        if (!currentKinPath) return '';
+        const parsed = parseKinPath(currentKinPath);
+        if (!parsed) return '';
+        const slash = parsed.relative.lastIndexOf('/');
+        const dir = slash >= 0 ? parsed.relative.slice(0, slash + 1) : '';
+        const base = kinPathBaseName(currentKinPath) || currentFilename || appConfig.defaultFilename;
+        return parsed.volume + ':' + dir + '.~autosave-' + Date.now() + '-' + base;
+    }
+
+    async function writeAutosaveRecovery(bytes) {
+        const recoveryPath = autosaveRecoveryPath();
+        if (!recoveryPath) return;
+        try {
+            await writeKinFileBytesSafe(recoveryPath, bytes);
+        } catch (_error) {}
+    }
+
+    async function applyKinOfficePatch(targetPath, fileType, baseSha256, targetSha256, patchBytes, reason) {
+        const response = await fetch('/api/file/patch_binary', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+                path: targetPath,
+                fileType: fileType || currentFileType,
+                baseSha256: baseSha256 || '',
+                targetSha256: targetSha256 || '',
+                reason: reason || 'save',
+                patch_base64: bytesToBase64(patchBytes)
+            })
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || json.response !== 'success') {
+            throw new Error((json && json.message) ? String(json.message) : 'Patch save failed');
+        }
+        return json;
+    }
+
+    async function patchCurrentDocument(reason) {
+        if (!currentKinPath) throw new Error('Save As is required before this document can be patch-saved.');
+        if (!currentBaselineBytes || !currentBaselineSha256) throw new Error('No trusted save baseline is available. Use Save As.');
+        const exported = await exportLocalDocument();
+        const bytes = exported.bytes;
+        validateOfficeBytes(bytes);
+        const targetSha256 = await sha256Hex(bytes);
+        if (targetSha256 === currentBaselineSha256) {
+            currentDirty = false;
+            return { bytes, skipped: true };
+        }
+        const patchBytes = createOfficePackagePatchBytes(currentBaselineBytes, bytes);
+        await applyKinOfficePatch(currentKinPath, currentFileType, currentBaselineSha256, targetSha256, patchBytes, reason || 'save');
+        await updateBaseline(bytes);
+        currentDirty = false;
+        postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
+        return { bytes, skipped: false };
+    }
+
+    function scheduleAutosave() {
+        clearAutosaveTimer();
+        if (!editorOpen || !currentDirty || !currentKinPath || autosavePaused) return;
+        const wait = Math.max(KIN_AUTOSAVE_IDLE_MS, KIN_AUTOSAVE_MIN_INTERVAL_MS - (Date.now() - lastAutosaveAt));
+        autosaveTimer = setTimeout(function() {
+            autosaveTimer = null;
+            runAutosave();
+        }, wait);
+    }
+
+    async function runAutosave() {
+        if (autosaveInFlight || saveInFlight || !editorOpen || !currentDirty || !currentKinPath || autosavePaused) return;
+        autosaveInFlight = true;
+        try {
+            const result = await patchCurrentDocument('autosave');
+            lastAutosaveAt = Date.now();
+            if (!result.skipped) sendSaveResult(true, 'Autosaved');
+        } catch (error) {
+            autosavePaused = true;
+            try {
+                const exported = await exportLocalDocument();
+                if (exported && exported.bytes) await writeAutosaveRecovery(exported.bytes);
+            } catch (_recoveryError) {}
+            console.warn('[KinOffice] Autosave paused:', error && error.message ? error.message : error);
+        } finally {
+            autosaveInFlight = false;
+            if (currentDirty && !autosavePaused) scheduleAutosave();
+        }
+    }
+
     async function loadBlankTemplateBytes(fileType) {
         const json = await kinOfficeCommand({ action: 'template', type: fileType || appConfig.fileType });
         const bytes = base64ToBytes(json.data_base64 || '');
@@ -452,9 +706,13 @@ export function bootstrapKinOfficeApp(config) {
         const opts = options || {};
         saveInFlight = (async function() {
             if (!editorOpen) throw new Error('Open a document first, then use Save.');
-            const targetPath = opts.forceSaveAs || !currentKinPath
-                ? await chooseSavePath(currentKinPath ? kinPathBaseName(currentKinPath) : currentFilename)
-                : currentKinPath;
+            if (!opts.forceSaveAs && currentKinPath) {
+                clearAutosaveTimer();
+                await patchCurrentDocument('manual-save');
+                sendSaveResult(true, '');
+                return;
+            }
+            const targetPath = await chooseSavePath(currentKinPath ? kinPathBaseName(currentKinPath) : currentFilename);
             const exported = await exportLocalDocument();
             const bytes = exported.bytes;
             validateOfficeBytes(bytes);
@@ -462,7 +720,10 @@ export function bootstrapKinOfficeApp(config) {
             currentKinPath = targetPath;
             currentFilename = kinPathBaseName(targetPath) || exported.fileName || currentFilename;
             currentFileType = fileTypeFromName(currentFilename, exported.fileType || currentFileType);
+            await updateBaseline(bytes);
             currentDirty = false;
+            autosavePaused = false;
+            lastAutosaveAt = Date.now();
             sendSaveResult(true, '');
             postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
         })();
@@ -481,11 +742,15 @@ export function bootstrapKinOfficeApp(config) {
     async function openKinPath(kinPath) {
         currentKinPath = kinPath;
         currentDirty = false;
+        clearAutosaveTimer();
+        autosavePaused = false;
+        const bytes = await readKinFileBytes(kinPath);
+        await updateBaseline(bytes);
         await openLocalDocument({
             kinPath,
             fileName: kinPathBaseName(kinPath) || appConfig.defaultFilename,
             fileType: fileTypeFromName(kinPathBaseName(kinPath), appConfig.fileType),
-            bytes: await readKinFileBytes(kinPath),
+            bytes,
             isNew: false
         });
     }
@@ -493,8 +758,12 @@ export function bootstrapKinOfficeApp(config) {
     async function openBlankDocument() {
         currentKinPath = null;
         currentDirty = false;
+        clearAutosaveTimer();
+        autosavePaused = false;
+        await updateBaseline(null);
         const debugBytes = await loadDebugDefaultDocumentBytes();
         if (debugBytes) {
+            await updateBaseline(debugBytes);
             await openLocalDocument({
                 fileName: appConfig.debugDefaultFilename || appConfig.defaultFilename,
                 fileType: appConfig.fileType,
@@ -553,6 +822,11 @@ export function bootstrapKinOfficeApp(config) {
         }
         if (data.event === 'documentStateChange') {
             currentDirty = !!data.changed;
+            if (currentDirty) {
+                scheduleAutosave();
+            } else {
+                clearAutosaveTimer();
+            }
             return;
         }
         if (data.event === 'saveRequested' || data.event === 'editorKeydown') {

@@ -128,13 +128,13 @@ POST /api/commands/kinoffice
 
 and receives base64 template bytes. The command also contains placeholders for `open`, `savefile`, and `downloadas`, but current Kin Office persistence does not rely on those actions for normal editing.
 
-## Saving
+## Saving And Autosave
 
 Kin owns persistence. Euro-Office is used for editing and serialization, not as a server.
 
-Save flow:
+Save As flow:
 
-1. User triggers Save, Save As, `Ctrl+S`, or editor save UI.
+1. User triggers Save As, or Save on a document that does not yet have a Kin path.
 2. Patched Euro-Office UI calls `window.KinOfficeDirectSave()` or adapter override of `api.asc_Save()`.
 3. `browser_editor.html` posts `saveRequested`.
 4. `office_app.js` requests `export` from the iframe.
@@ -144,7 +144,22 @@ Save flow:
 8. Small files use `POST /api/file/write_binary`.
 9. Larger files use `upload_begin`, `upload_chunk`, and `upload_finish`.
 10. `office_app.js` reads the saved path back and checks length to verify the write.
-11. Directory views are refreshed.
+11. The verified bytes become the trusted patch baseline.
+12. Directory views are refreshed.
+
+Normal Save and Autosave do not full-overwrite the target file. They use an OOXML ZIP-member patch:
+
+1. `office_app.js` keeps a trusted baseline from open, successful Save, successful Autosave, or successful Save As.
+2. Save/Autosave exports the current editor state to full OOXML bytes and validates the ZIP header.
+3. `office_app.js` parses the baseline and target Office ZIP central directories and builds a compact `KOP1` patch containing only added/replaced/deleted ZIP members.
+4. The patch is sent to `POST /api/file/patch_binary` with same-origin credentials.
+5. `polykernel.c` stages large patch JSON bodies, decodes `patch_base64`, and forwards `dos_patch_file_staged`.
+6. `dos_service.c` verifies each changed/deleted member still matches the client baseline metadata. If the same member changed on disk, the patch is rejected as a conflict.
+7. Non-overlapping disk changes are preserved by rebuilding the final ZIP from current disk members plus patch members.
+8. The rebuilt Office ZIP is written to a same-directory temp file, synced, and atomically renamed over the target.
+9. On success, `office_app.js` updates the trusted baseline and clears dirty state.
+
+Autosave is debounced and uses the same patch backend as Save. If Autosave conflicts or fails, it does not alter the target file; it best-effort writes a same-directory recovery copy named like `.~autosave-<timestamp>-<filename>` and pauses Autosave for that document.
 
 Current write threshold:
 
@@ -198,6 +213,7 @@ Slides are especially useful for font debugging because upstream default placeho
 | Save large file chunks | `POST /api/file/upload_chunk` |
 | Finish large save | `POST /api/file/upload_finish` |
 | Abort failed upload | `POST /api/file/upload_abort` |
+| Patch Save/Autosave | `POST /api/file/patch_binary` |
 
 All requests use same-origin credentials.
 
