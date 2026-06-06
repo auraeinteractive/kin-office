@@ -92,6 +92,15 @@ All URL construction must use Kin-relative paths and `window.location.origin`. D
 5. `browser_editor_adapter.js` converts OOXML to Euro-Office internal bin through browser `x2t.wasm`.
 6. The adapter opens the document with `editor.openDocument({ buffer })`.
 
+Important open-path details:
+
+- `office_app.js` never gives Euro-Office a remote document URL for local Kin files.
+- The adapter posts local document metadata first, waits for inner editor permissions to initialize, sets `api.ServerIdWaitComplete = true`, and then calls `editor.openDocument({ buffer })`.
+- `editor.openDocument({ buffer })` is the supported binary open route. It posts `openDocumentFromBinary` to the inner editor, which calls `asc_openDocumentFromBytes(...)`.
+- Do not call `main.api.onEndLoadFile(...)` directly for normal opens. That bypasses the expected gateway path and can leave the editor stuck at `Loading document`.
+- x2t open conversion uses explicit `m_nFormatFrom` and `m_nFormatTo` values for DOCX/XLSX/PPTX to internal canvas formats; do not rely on `.bin` extension inference.
+- x2t no-base64 output can already be a valid `DOCY/XLSY/PPTY` byte stream. The adapter must preserve signed internal payloads and only wrap raw serializer bytes.
+
 The editor iframe is expected to reply with:
 
 ```text
@@ -144,6 +153,14 @@ Current write threshold:
 ```
 
 Files at or above that threshold use chunked upload.
+
+Save/export details:
+
+- Patched Euro-Office UI routes toolbar save and keyboard save to `window.KinOfficeDirectSave`; the adapter also overrides `api.asc_Save()` as a fallback.
+- The adapter tries `api.getFileAsFromChanges()`, then `api.asc_nativeGetFile3()`, then `api.asc_nativeGetFileData()` with a temporary `native.Save_End` capture.
+- Native serializers may return either a complete `DOCY/XLSY/PPTY` payload or raw data plus a header. Complete internal payloads are passed through unchanged; raw data is wrapped with the correct header before x2t export.
+- Upstream `downloadAs()` and server callbacks are not used for Kin persistence.
+- `office_app.js` treats save as successful only after writing bytes to Kin and reading the saved path back to verify length.
 
 ## App-Specific Notes
 

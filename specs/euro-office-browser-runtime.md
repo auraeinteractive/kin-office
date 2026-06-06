@@ -62,13 +62,23 @@ web-apps/apps/api/documents/api.js
 wasm/x2t/x2t.js
 ```
 
-The adapter creates a `DocsAPI.DocEditor` instance and passes document metadata through the inner editor iframe. Real OOXML document bytes are opened locally with `editor.openDocument({ buffer })`.
+The adapter creates a `DocsAPI.DocEditor` instance and passes document metadata through the inner editor iframe. Real OOXML document bytes are converted locally with browser `x2t.wasm` and opened with `editor.openDocument({ buffer })`. Do not bypass this with direct `main.api.onEndLoadFile(...)` calls; the supported `DocEditor.openDocument()` path posts `openDocumentFromBinary` to the inner editor and lets Euro-Office call `asc_openDocumentFromBytes(...)`.
 
 For existing files:
 
 ```text
 OOXML bytes -> x2t.wasm -> DOCY/XLSY/PPTY internal bin -> editor.openDocument()
 ```
+
+The open conversion must pass explicit x2t format IDs because the output path uses a generic `.bin` extension:
+
+```text
+docx input -> m_nFormatFrom 0x0041, m_nFormatTo 0x2001
+xlsx input -> m_nFormatFrom 0x0101, m_nFormatTo 0x2002
+pptx input -> m_nFormatFrom 0x0081, m_nFormatTo 0x2003
+```
+
+`m_bIsNoBase64` is `true` for browser conversion. In this mode x2t may return an already-valid internal stream such as `DOCY;v10;0;<raw bytes>` instead of old base64 payload text. The adapter must preserve any payload that already starts with `DOCY;`, `XLSY;`, or `PPTY;`, whether it is a JavaScript string or a `Uint8Array`. Wrapping an already-valid internal stream inside another `DOCY/XLSY/PPTY` envelope makes Euro-Office open a blank/default model.
 
 For blank files:
 
@@ -92,7 +102,7 @@ XLSY;v...;
 PPTY;v...;
 ```
 
-The adapter must not pass raw serializer bytes to `x2t` without the expected internal envelope. `browser_editor_adapter.js` wraps raw serializer output with the correct prefix/version when needed.
+The adapter must not pass raw serializer bytes to `x2t` without the expected internal envelope. `browser_editor_adapter.js` wraps raw serializer output with the correct prefix/version when needed, but it must not wrap payloads that already have a `DOCY/XLSY/PPTY` signature.
 
 Current default versions:
 
@@ -102,7 +112,7 @@ xlsx -> XLSY v2
 pptx -> PPTY v10
 ```
 
-Prefer extracting the version from the source/template payload when possible.
+Prefer extracting the version from the source/template payload when possible. Existing blank templates currently provide older base64-style envelopes, while x2t no-base64 conversion can produce v10 raw-binary envelopes.
 
 ## Save APIs
 
@@ -119,6 +129,8 @@ Useful source-level/runtime save APIs:
 3. `api.asc_nativeGetFileData()` with a temporary `native.Save_End` capture
 
 Do not use upstream `asc_Save()` or `downloadAs()` for Kin persistence. Those enter upstream server/collaboration save machinery. Kin save hooks intercept save requests and call Kin-owned export/write logic.
+
+For export, `browser_editor_adapter.js` serializes the current editor state through the source-level/native APIs above, preserves or creates a valid internal `DOCY/XLSY/PPTY` payload, and runs x2t back to DOCX/XLSX/PPTX. Kin then validates the returned bytes as a ZIP before writing them to the Kin filesystem.
 
 ## Required Web-App Patches
 

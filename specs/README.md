@@ -16,9 +16,11 @@ The current implementation deliberately uses a browser-owned open/export path:
 
 1. Kin app shell reads bytes from Kin or asks `kinoffice.cmd` for blank templates.
 2. `browser_editor.html` hosts Euro-Office in an iframe.
-3. `browser_editor_adapter.js` converts OOXML bytes to Euro-Office internal bin data with browser `x2t.wasm`.
-4. Euro-Office edits in desktop-flavored browser mode.
-5. Kin-owned save hooks serialize editor state, convert back to OOXML bytes, and write through Kin file APIs.
+3. `browser_editor_adapter.js` converts OOXML bytes to Euro-Office internal bin data with browser `x2t.wasm`, using explicit DOCX/XLSX/PPTX-to-canvas format IDs.
+4. Euro-Office opens the converted payload through `editor.openDocument({ buffer })` / `openDocumentFromBinary`, not direct `onEndLoadFile()` calls.
+5. The adapter preserves valid no-base64 `DOCY/XLSY/PPTY` payloads and only wraps raw serializer bytes.
+6. Euro-Office edits in desktop-flavored browser mode.
+7. Kin-owned save hooks serialize editor state, convert back to OOXML bytes, and write through Kin file APIs.
 
 ## Font Note
 
