@@ -33,6 +33,18 @@ const OFFICE_MIME_TYPES = {
     xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 };
+const FILE_FORMAT_BINDINGS_INFO_PATH = 'System:Preferences/Settings/FileFormatBindings.info';
+const OFFICE_DEFAULT_BINDINGS = {
+    doc: 'kinoffice_docs',
+    docx: 'kinoffice_docs',
+    odt: 'kinoffice_docs',
+    xls: 'kinoffice_sheets',
+    xlsx: 'kinoffice_sheets',
+    ods: 'kinoffice_sheets',
+    ppt: 'kinoffice_slides',
+    pptx: 'kinoffice_slides',
+    odp: 'kinoffice_slides'
+};
 
 function isZipLocalHeader(bytes) {
     return bytes && bytes.length >= 4 &&
@@ -42,6 +54,10 @@ function isZipLocalHeader(bytes) {
 function validateOfficeBytes(bytes) {
     if (!bytes || !bytes.length) throw new Error('File is empty');
     if (!isZipLocalHeader(bytes)) throw new Error('File is not a valid Office document (missing ZIP header)');
+}
+
+function isKinOnlyOfficeAppId(value) {
+    return String(value || '').trim().indexOf('kinonlyoffice') === 0;
 }
 
 function bytesToBase64(bytes) {
@@ -407,6 +423,105 @@ export function bootstrapKinOfficeApp(config) {
                 title: title || 'Kin Office'
             });
         });
+    }
+
+    async function readKinTextFile(kinPath) {
+        const response = await fetch('/api/file/read', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8', Accept: 'application/json' },
+            body: JSON.stringify({ path: kinPath })
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || json.response !== 'success') {
+            throw new Error((json && json.message) ? String(json.message) : 'Could not read Kin file');
+        }
+        return typeof json.data === 'string' ? json.data : '';
+    }
+
+    async function writeKinTextFile(kinPath, body) {
+        const payload = JSON.stringify({ path: kinPath, body: String(body || '') }, null, 0);
+        const response = await fetch('/api/file/write', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json; charset=UTF-8', Accept: 'application/json' },
+            body: new Blob([payload], { type: 'application/json; charset=UTF-8' })
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || json.response !== 'success') {
+            throw new Error((json && json.message) ? String(json.message) : 'Could not write Kin file');
+        }
+    }
+
+    async function searchKinFileByName(pattern, rootPath) {
+        const response = await fetch('/api/commands/search', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', Accept: 'application/json' },
+            body: new URLSearchParams({ pattern, path: rootPath, max: '10' }).toString()
+        });
+        const json = await response.json().catch(function() { return null; });
+        if (!response.ok || !json || (json.response !== 'ok' && json.response !== 'success')) return [];
+        return Array.isArray(json.matches) ? json.matches : [];
+    }
+
+    async function readFileFormatBindingsInfo() {
+        try {
+            return {
+                path: FILE_FORMAT_BINDINGS_INFO_PATH,
+                text: await readKinTextFile(FILE_FORMAT_BINDINGS_INFO_PATH)
+            };
+        } catch (_error) {}
+
+        const matches = await searchKinFileByName('FileFormatBindings.info', 'System:Preferences');
+        for (let i = 0; i < matches.length; i += 1) {
+            const path = matches[i] && matches[i].path ? String(matches[i].path) : '';
+            if (!path) continue;
+            try {
+                return { path, text: await readKinTextFile(path) };
+            } catch (_error) {}
+        }
+        return null;
+    }
+
+    function migrateFileFormatBindingsDocument(doc) {
+        if (!doc || typeof doc !== 'object') return false;
+        if (!doc.extensions || typeof doc.extensions !== 'object') doc.extensions = {};
+        let changed = false;
+
+        Object.keys(OFFICE_DEFAULT_BINDINGS).forEach(function(ext) {
+            const app = OFFICE_DEFAULT_BINDINGS[ext];
+            const existing = doc.extensions[ext] && typeof doc.extensions[ext] === 'object'
+                ? doc.extensions[ext]
+                : {};
+            const rawOpenWith = Array.isArray(existing.openWith) ? existing.openWith : [];
+            const openWith = [app];
+            rawOpenWith.forEach(function(value) {
+                const item = String(value || '').trim();
+                if (!item || item === app || isKinOnlyOfficeAppId(item) || openWith.indexOf(item) >= 0) return;
+                openWith.push(item);
+            });
+
+            if (existing.default !== app || JSON.stringify(existing.openWith || []) !== JSON.stringify(openWith)) {
+                doc.extensions[ext] = { default: app, openWith };
+                changed = true;
+            }
+        });
+
+        if (doc.version == null || Number(doc.version) !== 1) {
+            doc.version = 1;
+            changed = true;
+        }
+        return changed;
+    }
+
+    async function migrateKinOnlyOfficeFileFormatBindings() {
+        const info = await readFileFormatBindingsInfo();
+        if (!info || !info.text || info.text.indexOf('kinonlyoffice') < 0) return;
+        const doc = JSON.parse(String(info.text));
+        if (!migrateFileFormatBindingsDocument(doc)) return;
+        await writeKinTextFile(info.path, JSON.stringify(doc, null, 2));
+        postToParent({ kinFileFormatBindingsChanged: true });
     }
 
     function kinApiErrorFromRawBytes(bytes) {
@@ -922,6 +1037,9 @@ export function bootstrapKinOfficeApp(config) {
     });
 
     registerMenus();
+    migrateKinOnlyOfficeFileFormatBindings().catch(function(error) {
+        console.warn('[KinOffice] Could not migrate kinonlyoffice file format bindings:', error && error.message ? error.message : error);
+    });
     openInitialDocument().catch(function(error) {
         openAlert('Could not open document:\n' + (error && error.message ? error.message : String(error)), 'Open failed');
     });
