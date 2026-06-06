@@ -312,8 +312,8 @@ const isIE=/msie|trident/i.test(navigator.userAgent);var checkLocalStorage=funct
       <script type="text/javascript" src="../../../vendor/xregexp/xregexp-all-min.js"></script>
 
       <!--sdk-->
-      <script type="text/javascript" src="../../../../sdkjs/common/AllFonts.js"></script>
-      <script type="text/javascript" src="../../../../sdkjs/word/sdk-all-min.js"></script>
+      <script type="text/javascript" src="../../../../sdkjs/common/AllFonts.js?kinOfficeBuild=20260606-cache22"></script>
+      <script type="text/javascript" src="../../../../sdkjs/word/sdk-all-min.js?kinOfficeBuild=20260606-cache22"></script>
 
       <!--application-->
       <script>
@@ -326,7 +326,7 @@ function checkExtendedPDF(directUrl,key,url,token,callback){var limit=300;if(dir
           function startApp() {
               var script = document.createElement("script");
               script.type  = "text/javascript";
-              script.src = "../../../apps/documenteditor/embed/app-all.js";
+              script.src = "../../../apps/documenteditor/embed/app-all.js?kinOfficeBuild=20260606-cache22";
               document.body.appendChild(script);
           }
           if (isForm===undefined) {

@@ -1,7 +1,7 @@
 (function() {
     'use strict';
 
-    var BUILD_ID = '20260604-cache16';
+    var BUILD_ID = '20260606-cache22';
     var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js?kinOfficeBuild=' + BUILD_ID;
     var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js?kinOfficeBuild=' + BUILD_ID;
     var apiPromise = null;
@@ -15,6 +15,12 @@
             console.log.apply(console, [DEBUG_PREFIX].concat(Array.prototype.slice.call(arguments)));
         } catch (_error) {}
     }
+
+    window.addEventListener('message', function(event) {
+        var data = event && event.data;
+        if (!data || data.type !== 'kinOfficeFontDebug') return;
+        debugLog('inner font debug', data.topic, data.data || {});
+    });
 
     function loadScript(src) {
         return new Promise(function(resolve, reject) {
@@ -171,6 +177,267 @@
                 });
             };
         });
+    }
+
+    function innerFontPath(inner) {
+        try {
+            var marker = '/web-apps/apps/';
+            var href = inner.location.href;
+            var idx = href.indexOf(marker);
+            if (idx !== -1) return href.slice(0, idx) + '/fonts/';
+            return new URL('../../../../fonts/', href).href;
+        } catch (_error) {
+            return '../../../../fonts/';
+        }
+    }
+
+    function describeInnerFont(fonts, name) {
+        var map = fontNameMap(fonts);
+        var infos = fontInfos(fonts);
+        var index = map && map[name];
+        var info = index !== undefined && infos ? infos[index] : null;
+        if (!info) return null;
+        return {
+            name: info.Name || info.ya,
+            indexR: info.indexR !== undefined ? info.indexR : info.N3,
+            faceIndexR: info.faceIndexR !== undefined ? info.faceIndexR : info.Ldb,
+            indexI: info.indexI !== undefined ? info.indexI : info.hda,
+            faceIndexI: info.faceIndexI !== undefined ? info.faceIndexI : info.rnc,
+            indexB: info.indexB !== undefined ? info.indexB : info.rP,
+            faceIndexB: info.faceIndexB !== undefined ? info.faceIndexB : info.pnc
+        };
+    }
+
+    function fontFiles(fonts) {
+        return fonts && (fonts.g_font_files || fonts.Snc) || null;
+    }
+
+    function fontInfos(fonts) {
+        return fonts && (fonts.g_font_infos || fonts.i4a) || null;
+    }
+
+    function fontNameMap(fonts) {
+        return fonts && (fonts.g_map_font_index || fonts.y0b) || null;
+    }
+
+    function fontApplication(fonts) {
+        return fonts && (fonts.g_fontApplication || fonts.CQ) || null;
+    }
+
+    function fontFileId(file) {
+        return file && (file.Id || file.Va || file.id || file.name);
+    }
+
+    function fontInfoName(info) {
+        return info && (info.Name || info.ya);
+    }
+
+    function installInnerFontProbe(reason) {
+        var inner = getInnerWindow();
+        var fonts = inner.AscFonts;
+        var loader = inner.AscCommon && inner.AscCommon.g_font_loader;
+        var files = fontFiles(fonts);
+        var infos = fontInfos(fonts);
+        var map = fontNameMap(fonts);
+        var app = fontApplication(fonts);
+        if (loader && !loader._kinParentFontPathForced) {
+            loader._kinParentFontPathForced = true;
+            loader.fontFilesPath = innerFontPath(inner);
+            debugLog('parent font probe:path forced', {
+                reason: reason,
+                href: inner.location.href,
+                fontFilesPath: loader.fontFilesPath
+            });
+        }
+        inner.onLogPickFont = function(message) {
+            debugLog('parent font probe:pick font', { message: String(message || '') });
+        };
+        if (!fonts || !files || !infos || !app || !map) {
+            return false;
+        }
+        if (!fonts._kinParentFontProbeLogged) {
+            fonts._kinParentFontProbeLogged = true;
+            debugLog('parent font probe:registry', {
+                reason: reason,
+                allFontsVersion: inner.__all_fonts_js_version__,
+                selectionBinBytes: inner.g_fonts_selection_bin ? inner.g_fonts_selection_bin.length : 0,
+                files: files && files.length,
+                infos: infos && infos.length,
+                symbolMode: {
+                    files: fonts.g_font_files ? 'source' : 'minified',
+                    infos: fonts.g_font_infos ? 'source' : 'minified',
+                    map: fonts.g_map_font_index ? 'source' : 'minified',
+                    app: fonts.g_fontApplication ? 'source' : 'minified'
+                },
+                arial: describeInnerFont(fonts, 'Arial'),
+                calibri: describeInnerFont(fonts, 'Calibri'),
+                dengxian: describeInnerFont(fonts, 'DengXian'),
+                ascw3: describeInnerFont(fonts, 'ASCW3')
+            });
+        }
+        if (!fonts._kinParentFontLoaderWrapped) {
+            fonts._kinParentFontLoaderWrapped = true;
+            (files || []).forEach(function(file, index) {
+                if (!file || file._kinParentFontDiagnosticsWrapped || typeof file.LoadFontAsync !== 'function') return;
+                file._kinParentFontDiagnosticsWrapped = true;
+                var originalLoadFontAsync = file.LoadFontAsync;
+                file.LoadFontAsync = function(basePath, callback) {
+                    debugLog('parent font probe:load request', {
+                        index: index,
+                        id: fontFileId(file),
+                        basePath: basePath,
+                        status: file.Status,
+                        streamIndex: file.stream_index
+                    });
+                    return originalLoadFontAsync.call(file, basePath, function() {
+                        var streams = fonts.g_fonts_streams || inner.AscCommon && inner.AscCommon.ZI && inner.AscCommon.ZI.eNa;
+                        var stream = streams && streams[file.stream_index];
+                        debugLog('parent font probe:load complete', {
+                            index: index,
+                            id: fontFileId(file),
+                            status: file.Status,
+                            streamIndex: file.stream_index,
+                            size: stream && stream.size,
+                            header: streamHeader(stream)
+                        });
+                        if (callback) callback();
+                    });
+                };
+            });
+        }
+        installInnerPackagedFontPicker(inner, fonts);
+        return true;
+    }
+
+    function installInnerPackagedFontPicker(inner, fonts) {
+        var app = fonts && fonts.g_fontApplication;
+        var map = fontNameMap(fonts);
+        var infos = fontInfos(fonts);
+        app = fontApplication(fonts);
+        if (!app || !map || app._kinParentFontPickerInstalled) return;
+        app._kinParentFontPickerInstalled = true;
+
+        function has(name) {
+            return name !== undefined && name !== null && map[String(name)] !== undefined;
+        }
+        function hasCjk(value) {
+            var text = String(value || '');
+            for (var i = 0; i < text.length; i += 1) {
+                var code = text.charCodeAt(i);
+                if ((code >= 0x2e80 && code <= 0x9fff) || (code >= 0xf900 && code <= 0xfaff)) return true;
+            }
+            return false;
+        }
+        function resolve(name) {
+            var requested = String(name || '').replace(/^[\s'"]+|[\s'"]+$/g, '');
+            if (has(requested)) return requested;
+            var lower = requested.toLowerCase();
+            if (lower === 'serif') return has('Times New Roman') ? 'Times New Roman' : 'Noto Serif';
+            if (lower === 'monospace') return has('Courier New') ? 'Courier New' : 'Liberation Mono';
+            if (lower === 'sans-serif' || !requested) return has('Arial') ? 'Arial' : 'Liberation Sans';
+            if (hasCjk(requested)) return has('Noto Sans CJK SC') ? 'Noto Sans CJK SC' : 'DengXian';
+            return has('Arial') ? 'Arial' : (has('Liberation Sans') ? 'Liberation Sans' : Object.keys(map)[0]);
+        }
+        function pick(name, style) {
+            var resolved = resolve(name);
+            debugLog('parent font probe:pick packaged font', {
+                requested: String(name || ''),
+                resolved: resolved,
+                style: style || 0
+            });
+            return { m_wsFontName: resolved, m_lStyle: style || 0 };
+        }
+        function pickMinified(name, style) {
+            var resolved = resolve(name);
+            debugLog('parent font probe:pick packaged font', {
+                requested: String(name || ''),
+                resolved: resolved,
+                style: style || 0,
+                symbolMode: 'minified'
+            });
+            return { uda: resolved, m_wsFontName: resolved, dL: String(name || '') };
+        }
+
+        if (fonts.g_fontApplication) {
+            app.GetFontFileWeb = pick;
+            app.GetFontFile = pick;
+            app.GetFontInfoName = function(name, objDst) {
+                var resolved = resolve(name);
+                if (objDst !== undefined) {
+                    objDst.Name = resolved;
+                    objDst.Replace = app.CheckReplaceGlyphsMap ? app.CheckReplaceGlyphsMap(name, objDst) : null;
+                }
+                return resolved;
+            };
+            app.GetFontInfoWithoutEmbed = function(name, _style, objDst) {
+                var resolved = resolve(name);
+                if (objDst !== undefined) {
+                    objDst.Name = resolved;
+                    objDst.Replace = app.CheckReplaceGlyphsMap ? app.CheckReplaceGlyphsMap(name, objDst) : null;
+                }
+                return infos[map[resolved]];
+            };
+            app.GetFontInfo = app.GetFontInfoWithoutEmbed;
+            app.LoadFontWithoutEmbed = function(name, _fontLoader, fontManager, size, style, horDpi, verDpi, transform, objDst) {
+                var info = app.GetFontInfoWithoutEmbed(name, style, objDst);
+                return info.LoadFont(inner.AscCommon.g_font_loader, fontManager, size, style, horDpi, verDpi, transform);
+            };
+            app.LoadFont = app.LoadFontWithoutEmbed;
+        } else {
+            if (app.v1d) app.v1d = {};
+            app.Yed = pickMinified;
+            app.mEc = function(name) {
+                return resolve(name);
+            };
+            app.bC = app.Wof = app.sah = function(name, _style, objDst) {
+                var selected = pickMinified(name, _style);
+                if (objDst !== undefined) {
+                    objDst.ya = selected.uda;
+                    objDst.SS = app.sgf ? app.sgf(name, objDst) : null;
+                }
+                return infos[map[selected.uda]];
+            };
+        }
+
+        debugLog('parent font probe:packaged picker installed', {
+            arial: has('Arial'),
+            cjk: has('Noto Sans CJK SC'),
+            selectionBinBytes: inner.g_fonts_selection_bin ? inner.g_fonts_selection_bin.length : 0
+        });
+    }
+
+    function watchInnerFontProbe(reason, attemptsLeft) {
+        try {
+            if (installInnerFontProbe(reason)) return;
+            if ((attemptsLeft || 0) === 300 || (attemptsLeft || 0) % 50 === 0) {
+                var inner = getInnerWindow();
+                debugLog('parent font probe:waiting', {
+                    reason: reason,
+                    attemptsLeft: attemptsLeft || 0,
+                    href: inner.location && inner.location.href,
+                    hasAscFonts: !!inner.AscFonts,
+                    hasFontFiles: !!fontFiles(inner.AscFonts),
+                    hasFontInfos: !!fontInfos(inner.AscFonts),
+                    hasFontMap: !!fontNameMap(inner.AscFonts),
+                    hasFontApplication: !!fontApplication(inner.AscFonts)
+                });
+            }
+        } catch (error) {
+            if ((attemptsLeft || 0) === 300 || (attemptsLeft || 0) % 50 === 0) {
+                debugLog('parent font probe:waiting', {
+                    reason: reason,
+                    attemptsLeft: attemptsLeft || 0,
+                    error: error && error.message ? error.message : String(error)
+                });
+            }
+        }
+        if ((attemptsLeft || 0) <= 0) {
+            debugLog('parent font probe:exhausted', { reason: reason });
+            return;
+        }
+        setTimeout(function() {
+            watchInnerFontProbe(reason, attemptsLeft - 1);
+        }, 100);
     }
 
     function documentTypeFor(fileType) {
@@ -708,6 +975,7 @@
                     onAppReady: function() {
                         try {
                             debugLog('onAppReady', fileName, fileType);
+                            watchInnerFontProbe('onAppReady', 300);
                             if (!editor || typeof editor.openDocument !== 'function') {
                                 throw new Error('Kin Office binary open API is not available.');
                             }
@@ -717,10 +985,12 @@
                             });
                             setTimeout(function() {
                                 try {
+                                    watchInnerFontProbe('before openDocument', 300);
                                     debugLog('open binary', fileName, fileType);
                                     editor.openDocument({
                                         buffer: payloadToArrayBuffer(sourcePayload)
                                     });
+                                    watchInnerFontProbe('after openDocument', 300);
                                     watchInnerDocumentReady(300);
                                 } catch (error) {
                                     debugLog('open binary failed', error && error.message ? error.message : String(error));

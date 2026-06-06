@@ -6,6 +6,7 @@ This directory is the working specification set for Kin Office. Agents should tr
 
 - [Euro-Office Browser Runtime](./euro-office-browser-runtime.md)
 - [Kin Office Architecture](./kin-office-architecture.md)
+- [Font rendering bug (resolved)](./problems/font-problem.md)
 
 ## Current Scope
 
@@ -21,7 +22,7 @@ The current implementation deliberately uses a browser-owned open/export path:
 
 ## Font Note
 
-Euro-Office canvas text is not rendered with normal HTML/CSS fonts; it uses its own font registry and font loader. Earlier cache11–cache16 work addressed CJK alias mapping, debug DOCX loading, and stale inner-editor caches; see [Euro-Office Browser Runtime: Fonts](euro-office-browser-runtime.md#fonts).
+Euro-Office canvas text uses `AscFonts`, `AllFonts.js`, and ODTTF font files — not HTML/CSS fonts. A blank `g_fonts_selection_bin` in generated `AllFonts.js` caused the picker to fall back to symbol font `ASCW3` (zeros/boxes on canvas while copied text stayed correct). This is **resolved** in `20260606-cache22`; see [Font problem (resolved)](./problems/font-problem.md) and [Euro-Office Browser Runtime: Fonts](euro-office-browser-runtime.md#fonts).
 
 ## Non-Goals
 

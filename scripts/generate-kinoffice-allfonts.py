@@ -7,8 +7,10 @@ sdkjs/common/Drawings/Externals.js: __fonts_files, __fonts_infos, version 2.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
+import struct
 import sys
 import urllib.error
 import urllib.parse
@@ -296,11 +298,158 @@ def js_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def _pack_i32(value: int) -> bytes:
+    return struct.pack("<i", value)
+
+
+def _pack_u32(value: int) -> bytes:
+    return struct.pack("<I", value & 0xFFFFFFFF)
+
+
+def _pack_i16(value: int) -> bytes:
+    return struct.pack("<h", value)
+
+
+def _pack_u16(value: int) -> bytes:
+    return struct.pack("<H", value & 0xFFFF)
+
+
+def _pack_utf8(value: str) -> bytes:
+    raw = value.encode("utf-8")
+    return _pack_i32(len(raw)) + raw
+
+
+def is_cjk_font_name(name: str) -> bool:
+    cjk_tokens = [
+        "CJK",
+        "DengXian",
+        "YaHei",
+        "SimHei",
+        "SimSun",
+        "NSimSun",
+        "PingFang",
+        "Noto Sans SC",
+        "等线",
+        "黑体",
+        "宋体",
+    ]
+    return any(token in name for token in cjk_tokens)
+
+
+def build_font_selection_bin(font_files: list[str], font_infos: list[list]) -> str:
+    """Build the Euro-Office v2 selectable-font binary as base64.
+
+    The SDK's native picker does not search __fonts_infos directly. It first
+    parses window.g_fonts_selection_bin into CFontSelect records; when this was
+    empty, ordinary names like Arial resolved to the bundled ASCW3 symbol font.
+    """
+    records: list[bytes] = []
+    seen_names: set[str] = set()
+    seen_paths: set[str] = set()
+
+    for info in font_infos:
+        name = str(info[0])
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+
+        regular_index = int(info[1])
+        regular_face_index = int(info[2])
+        font_path = font_files[regular_index]
+        seen_paths.add(font_path)
+        is_cjk = is_cjk_font_name(name)
+
+        # Wide coverage keeps Euro-Office from choosing language/symbol
+        # fallbacks before it reaches our packaged fonts. Exact name matching
+        # remains the main selector.
+        unicode_range1 = 0xFFFFFFFF
+        unicode_range2 = 0xFFFFFFFF if is_cjk else 0x00000000
+        unicode_range3 = 0x00000000
+        unicode_range4 = 0x00000000
+        code_page_range1 = 0xFFFFFFFF if is_cjk else 0x00000001
+        code_page_range2 = 0x00000000
+        fixed_pitch = 1 if any(token in name for token in ["Mono", "Courier", "Consolas", "Cousine"]) else 0
+        panose = bytes([2, 11, 6, 4, 2, 2, 2, 2, 2, 4])
+
+        payload = b"".join(
+            [
+                _pack_utf8(name),
+                _pack_i32(0),  # additional names count
+                _pack_utf8(font_path),
+                _pack_i32(regular_face_index),
+                _pack_i32(0),  # italic
+                _pack_i32(0),  # bold
+                _pack_i32(fixed_pitch),
+                _pack_i32(len(panose)),
+                panose,
+                _pack_u32(unicode_range1),
+                _pack_u32(unicode_range2),
+                _pack_u32(unicode_range3),
+                _pack_u32(unicode_range4),
+                _pack_u32(code_page_range1),
+                _pack_u32(code_page_range2),
+                _pack_u16(400),
+                _pack_u16(5),
+                _pack_i16(0),
+                _pack_i16(0),
+                _pack_i16(500),
+                _pack_i16(900),
+                _pack_i16(-200),
+                _pack_i16(0),
+                _pack_i16(500),
+                _pack_i16(700),
+                _pack_u16(0),
+            ]
+        )
+        records.append(_pack_i32(len(payload) + 4) + payload)
+
+    # Language fallback checks index the selection list by loaded font file id,
+    # not only by family name. Ensure every packaged regular file has a record.
+    for index, font_path in enumerate(font_files):
+        if font_path in seen_paths:
+            continue
+        payload = b"".join(
+            [
+                _pack_utf8(font_path),
+                _pack_i32(0),
+                _pack_utf8(font_path),
+                _pack_i32(0),
+                _pack_i32(0),
+                _pack_i32(0),
+                _pack_i32(0),
+                _pack_i32(10),
+                bytes([2, 11, 6, 4, 2, 2, 2, 2, 2, 4]),
+                _pack_u32(0xFFFFFFFF),
+                _pack_u32(0xFFFFFFFF),
+                _pack_u32(0),
+                _pack_u32(0),
+                _pack_u32(0xFFFFFFFF),
+                _pack_u32(0),
+                _pack_u16(400),
+                _pack_u16(5),
+                _pack_i16(0),
+                _pack_i16(0),
+                _pack_i16(500),
+                _pack_i16(900),
+                _pack_i16(-200),
+                _pack_i16(0),
+                _pack_i16(500),
+                _pack_i16(700),
+                _pack_u16(0),
+            ]
+        )
+        records.append(_pack_i32(len(payload) + 4) + payload)
+
+    data = _pack_i32(len(records)) + b"".join(records)
+    return base64.b64encode(data).decode("ascii")
+
+
 def write_allfonts_js(font_files: list[str], font_infos: list[list]) -> None:
+    selection_bin = build_font_selection_bin(font_files, font_infos)
     lines = [
         "/* Generated by scripts/generate-kinoffice-allfonts.py — do not edit by hand. */",
         "/* Open-licensed TTF/OTF fonts for Kin Office browser editing. */",
-        "((window.g_fonts_selection_bin = window.g_fonts_selection_bin || ''),",
+        f"((window.g_fonts_selection_bin = window.g_fonts_selection_bin || {js_string(selection_bin)}),",
         "  (window.__all_fonts_js_version__ = 2),",
         "  (window.__fonts_files = [",
     ]

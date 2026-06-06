@@ -1,8 +1,12 @@
 # Kin Office Font Rendering Bug
 
-**Date:** 2026-06-04
-**Status:** UNRESOLVED
-**Build id:** `20260604-cache16`
+**Status:** Resolved
+
+**Date opened:** 2026-06-04  
+**Date resolved:** 2026-06-06  
+**Build id:** `20260606-cache22`
+
+**Why it was fixed:** Euro-Office's native font picker does not search `__fonts_infos` directly. It first parses `window.g_fonts_selection_bin` into selectable font records. Kin Office's generated `AllFonts.js` left that bin empty, so ordinary names like `Arial` and `Times New Roman` fell through to the bundled symbol font `ASCW3`. That kept document text correct when copied (Unicode was fine) but made the canvas render digit/box glyphs and broke the font dropdown. The durable fix is in `scripts/generate-kinoffice-allfonts.py`: it now emits a valid Euro-Office v2 `g_fonts_selection_bin` with one selectable record per packaged family/alias, each pointing at the matching `odttf10-*` file. After regenerating `AllFonts.js` and deploying cache22, the picker resolves `Arial => Arial` and canvas text renders normally.
 
 ---
 
@@ -16,7 +20,17 @@ When opening a new document in the Kin Office Docs app and typing ASCII text, gl
 - Run-level styling (color, size) is preserved
 - The actual text content is correct — copying and pasting the "00000" yields `Hello`
 
-The font dropdown UI is also broken: the list of font names appears as empty `<a></a>` elements with no glyph preview. The font names are present in the DOM but the in-font preview is missing.
+The font dropdown UI is also broken: the list of font names appears blank, and style/gallery previews render the same box glyphs as the document canvas.
+
+Important current clue: copying the visible box text from the document and pasting it elsewhere yields the correct Unicode text:
+
+```text
+Hello world!
+
+How are you doing?
+```
+
+That means the DOCX/open/x2t text content is intelligible. The failure is in Euro-Office's canvas font selection/rendering path, not in the document text payload.
 
 This affects at least the Docs kin app; behaviour in Sheets/Slides is not yet observed.
 
@@ -55,7 +69,7 @@ The Docs app loads the Euro-Office browser SDK at runtime:
 | `repository/Applications/Office/kinoffice_common/vendor/kin-office/source/sdkjs/common/libfont/character.js` | Reference — `FontPickerByCharacter` at line 1080-1101; `window.onLogPickFont("FontBySymbol: …")` at line 154-155. |
 | `repository/Applications/Office/kinoffice_common/vendor/kin-office/source/sdkjs/common/GlobalLoaders.js` | Reference — `this.fontFilesPath = "../../../../fonts/"` at line 43 (relative to the iframe). |
 | `scripts/generate-kinoffice-allfonts.py` | Generator for `AllFonts.js` and the `odttf10-*` font files. Writes to `repository/Applications/Office/kinoffice_common/vendor/kin-office/packages/kin-office/7/fonts/`. |
-| `scripts/patch-euro-office-save-hooks.py` | Vendor web-app patcher (not yet relevant). |
+| `scripts/patch-euro-office-save-hooks.py` | Vendor web-app patcher. Injects repeatable inner-iframe font diagnostics and the current packaged-font picker bypass. |
 | `deploy.sh` | Deploys `kinoffice_*` apps to `${KIN_BUILD_PATH}/repository/Applications/Office/` (no `--delete`, no nginx reload). |
 
 ---
@@ -156,15 +170,156 @@ function installFontDiagnostics() {
 
 **Critical flaw:** `window.AscFonts` is not in the parent window; the SDK runs in the nested iframe. The diagnostics as written are no-ops and would not capture anything in the parent console. Need to either inject this hook into the nested iframe, or hook the iframe's `XMLHttpRequest.prototype` from the parent.
 
+### 6. Runtime iframe diagnostics (`20260606-cache17` / `20260606-cache18`)
+
+`20260606-cache17` addresses the critical flaw above. It does not try another blind font catalog rewrite.
+
+Important correction after first `cache17` deploy:
+
+- The initial patch script was not idempotent for SDK bundle paths. It replaced strings like `../../sdkjs/slide/sdk-all` with `../../sdkjs/slide/sdk-all-min`, but an already-patched `sdk-all-min` still starts with `sdk-all`.
+- Re-running the patcher produced bad URLs such as `sdk-all-min-min-min.js`, causing 404s and preventing the editor runtime from loading normally.
+- The patcher now collapses repeated `-min` suffixes back to exactly one and no longer performs the broad `../../sdkjs/*/sdk-all` replacement.
+- If a future test shows `sdk-all-min-min*.js`, fix the patcher/idempotency first; do not debug fonts while the SDK bundle is 404ing.
+
+Changes:
+
+- `scripts/patch-euro-office-save-hooks.py` injects a `kinOfficeFontDebug` script into editor iframe HTML files that contain `window.parentOrigin`.
+- The injected script runs inside the nested `frameEditor` window before the SDK loads.
+- It wraps `XMLHttpRequest` and logs watched requests for `AllFonts`, `odttf*`, `fonts/`, and `fonts_thumbnail*`.
+- It installs `window.onLogPickFont` so vendor `FontPicker` and `FontBySymbol` decisions are visible.
+- It waits until `window.AscFonts.g_font_files` and `window.AscFonts.g_font_infos` exist, then wraps each `CFontFileLoader.LoadFontAsync`.
+- It logs `font load request` and `font load complete`, including stream size and decoded header bytes.
+- It forces `AscCommon.g_font_loader.fontFilesPath` to an absolute same-origin `/fonts/` URL derived from the iframe URL. This should be equivalent to the normal relative path, but removes base-URL ambiguity from the next test.
+- `browser_editor_adapter.js` relays these messages as `[KinOfficeBrowser 20260606-cache17] inner font debug ...`.
+- The same injected script now also installs a temporary packaged-font picker bypass. This is a targeted test for the empty-selection-bin / `ASCW3` theory below.
+
+Expected useful console lines:
+
+```text
+[KinOfficeBrowser 20260606-cache17] inner font debug xhr start ...
+[KinOfficeBrowser 20260606-cache17] inner font debug xhr load {status: 200, size: ...}
+[KinOfficeBrowser 20260606-cache17] inner font debug font path forced ...
+[KinOfficeBrowser 20260606-cache17] inner font debug font registry ...
+[KinOfficeBrowser 20260606-cache17] inner font debug font load request ...
+[KinOfficeBrowser 20260606-cache17] inner font debug font load complete {header: "00 01 00 00 ..." | "74 74 63 66 ..."}
+[KinOfficeBrowser 20260606-cache17] inner font debug pick font ...
+[KinOfficeBrowser 20260606-cache17] inner font debug packaged font picker installed ...
+[KinOfficeBrowser 20260606-cache17] inner font debug pick packaged font {requested: "Arial", resolved: "Arial", ...}
+```
+
+Interpretation:
+
+- If `odttf*` XHRs are missing or have non-200 status/incorrect size, fix runtime URL/cache/service-worker behavior.
+- If XHRs are 200 but `font load complete` headers are not TTF/TTC/OTF magic after decode, fix the generated font encoding or server response.
+- If font streams decode correctly but picker chooses an unexpected family/face, fix alias/face selection.
+- If font streams and picker choices are correct yet `Hello!` still renders as `00000←`, the bug is below the loader, likely in WASM font registration/charmap selection.
+
+### 7. Empty `g_fonts_selection_bin` / `ASCW3` theory
+
+This is the current best explanation for the exact symptom.
+
+`scripts/generate-kinoffice-allfonts.py` intentionally writes a generated `AllFonts.js` catalog with real `window.__fonts_files` and `window.__fonts_infos`, but leaves the Euro-Office selection binary empty:
+
+```js
+((window.g_fonts_selection_bin = window.g_fonts_selection_bin || ''),
+```
+
+In upstream `sdkjs/common/libfont/map.js`, `CFontSelectList.Init()` only parses real selectable font entries when `window.g_fonts_selection_bin != ""`. If the binary is empty, it still appends special font entries, including `ASCW3`. Later `CApplicationFonts.Init()` asks the selection list to resolve `Arial`; when `Arial` is absent from the selection list, the default can become `ASCW3`.
+
+`ASCW3` is a vendor special/symbol font, not a normal Latin document font. If normal text is resolved to `ASCW3`, the document can still contain correct Unicode text while the canvas draws box-like glyphs and symbol arrows. That matches the user report: `Hello world!` copies correctly, but renders visually as boxes and `!` can appear as an arrow-like symbol.
+
+Action taken in `20260606-cache17`:
+
+- `scripts/patch-euro-office-save-hooks.py` now injects a packaged-font picker bypass into the document editor iframe.
+- The bypass overrides `AscFonts.g_fontApplication.GetFontFileWeb`, `GetFontFile`, `GetFontInfoName`, `GetFontInfoWithoutEmbed`, and load methods after `AscFonts` initializes.
+- It resolves requested family names directly against `AscFonts.g_map_font_index`.
+- Known generic families resolve to real packaged fonts (`sans-serif` -> `Arial`, `serif` -> `Times New Roman`, `monospace` -> `Courier New` when present).
+- Unknown Latin requests fall back to packaged `Arial`/`Liberation Sans`, not `ASCW3`.
+- CJK-looking names can still resolve to packaged CJK aliases, but Chinese is not the default fallback for Latin text.
+- It logs `packaged font picker installed` and `pick packaged font` so the next run can prove whether `Arial` is now being selected.
+
+This is still a runtime debug bypass, not the final elegant fix. If it works, the durable fix should be either generating a valid `g_fonts_selection_bin` or keeping an explicit Kin font-selection adapter that matches Euro-Office expectations.
+
+Cache17 result:
+
+- User confirmed the debug DOCX loads and copies as correct English text, but still renders as boxes.
+- Console showed the app and inner editor were on `20260606-cache17`.
+- Console did **not** show any `KinOfficeFont`, `inner font debug`, `packaged font picker installed`, or `pick packaged font` lines.
+- Therefore the cache17 injected iframe font script either did not execute in the served frame, did not reach the adapter, or was not captured in the pasted console. Do not assume the packaged picker was actually tested by that screenshot.
+
+Cache18 change:
+
+- `browser_editor_adapter.js` now also performs a parent-side same-origin probe against `iframe[name="frameEditor"].contentWindow`.
+- It logs `parent font probe:*` lines from the adapter itself, sets the inner `onLogPickFont`, forces `fontFilesPath`, wraps font loads, and installs the same packaged-font picker directly on `inner.AscFonts.g_fontApplication`.
+- This does not rely on the injected HTML script posting messages back.
+- Added empty `plugins.json` at the package root to silence the optional plugin loader 404. That 404 is not considered the font root cause.
+
+Cache18 result:
+
+- The parent-side probe ran and confirmed the key failure:
+
+```text
+FontPicker: Arial => ASCW3
+FontPicker: Times New Roman => ASCW3
+FontPicker: Courier New => ASCW3
+```
+
+- The probe also showed `hasAscFonts: true` but `hasFontFiles: false`, so the packaged picker could not install through `g_font_files`/`g_font_infos`.
+- Browser stack frames still showed `sdk-all-min.js?kinOfficeBuild=20260606-cache17` while the outer and iframe HTML were cache18.
+- Root cause for that stale SDK path: `documenteditor/embed/index.html` directly loaded `AllFonts.js`, `sdk-all-min.js`, and `embed/app-all.js` without the Kin cache query. RequireJS had cache18, but those direct scripts did not.
+
+Cache19 change:
+
+- `scripts/patch-euro-office-save-hooks.py` now cache-busts the direct `AllFonts.js`, direct `sdk-all-min.js`, and dynamic `embed/app-all.js` script loads in editor embed HTML.
+- If cache19 still logs `FontPicker: Arial => ASCW3`, the next target is generating `g_fonts_selection_bin` or bypassing the picker earlier than document open.
+
+Cache19 result:
+
+- Direct scripts are now cache-busted, but the editor still logs `FontPicker: Arial => ASCW3`.
+- The parent probe still could not install the packaged picker because the runtime is minified and does not expose the source names `g_font_files`, `g_font_infos`, `g_map_font_index`, or `g_fontApplication`.
+- Static SDK inspection shows the equivalent minified symbols:
+  - `AscFonts.Snc` = packaged font files
+  - `AscFonts.i4a` = packaged font infos
+  - `AscFonts.y0b` = font-name-to-index map
+  - `AscFonts.CQ` = font application/picker
+- Cache20 added support for those minified symbols and overrode minified picker methods (`Yed`, `bC`/`Wof`/`sah`, `mEc`, `vE`) when source symbols were absent.
+
+Cache20 result:
+
+- The parent probe proved the minified registry was reachable and the runtime picker bypass could resolve `Times New Roman` to `Times New Roman`.
+- The build then produced an editor warning dialog:
+
+```text
+An error occurred during the work with the document.
+Use the 'Download as' option to save the file backup copy to a drive.
+```
+
+- Console showed:
+
+```text
+Uncaught TypeError: this.mGb.FPb is not a function
+at b.vE (sdk-all.js:5658:30)
+at app.vE (browser_editor_adapter.js?...:402:29)
+```
+
+- Conclusion: overriding minified `app.vE` was wrong and corrupted an internal call path. Do not retry this as the main fix.
+- Cache21 removes the `app.vE` override. The remaining parent-side probe is diagnostic only; the primary fix moved earlier into generated `AllFonts.js`.
+
+Cache21 change:
+
+- `scripts/generate-kinoffice-allfonts.py` now generates a non-empty Euro-Office v2 `g_fonts_selection_bin`.
+- The generated bin contains one selectable record per packaged family/alias (`Arial`, `Calibri`, `Times New Roman`, `Courier New`, etc.) plus file-id records for style files.
+- Selection records use the display family as `m_wsFontName` and the packaged `odttf10-*` file id as `m_wsFontPath`.
+- This is meant to let `CFontSelectList.Init()` populate the native selection list before `CApplicationFonts.Init()` asks for Arial.
+- Expected proof in console after deploy: `FontPicker: Arial => Arial` (or another packaged Latin alias), not `FontPicker: Arial => ASCW3`.
+
 ---
 
 ## Current state
 
-- `AllFonts.js` regenerated (63 families, includes new Office default aliases).
-- `./deploy.sh --to-kin` ran successfully; `kinoffice_*` apps copied to `/home/hogne/Projects/Aurae/kin/build/repository/Applications/Office/`. Kin nginx not reloaded.
-- User has tested the deployed build and reports the bug persists: text still renders as `00000` / `←`; font dropdown is still blank.
-- The static analysis (catalog + XOR + face index + HTTP reachability) does not point to a single obvious cause.
-- The bug must be in something that is not visible from static analysis: most likely the font file requests are not completing in the iframe at runtime, or the WASM engine is failing to parse the buffers for a runtime-only reason.
+- **Resolved in `20260606-cache22`.** Typed ASCII, imported DOCX text, font dropdown names, and style previews render with packaged fonts instead of `ASCW3` symbol glyphs.
+- `AllFonts.js` now includes a non-empty `g_fonts_selection_bin` generated alongside `__fonts_files` and `__fonts_infos`.
+- Inner-iframe font diagnostics remain in `scripts/patch-euro-office-save-hooks.py` and `browser_editor_adapter.js` for future debugging; they are not required for correct rendering once the selection bin is populated.
 
 ---
 
@@ -172,24 +327,23 @@ function installFontDiagnostics() {
 
 In rough order of likelihood:
 
-1. **XHR failing in the iframe at runtime** (e.g. due to service worker, cache, CSP, or a CORS-like block) — the SDK falls back to placeholder glyphs. The user can verify by opening DevTools Network tab in the browser and looking for requests to `odttf10-*`. Need: URL, status, response size.
-2. **Font picker is picking a name that exists in `g_font_infos` but maps to a face index that does not match what the WASM engine expects.** Static analysis is clean; runtime is the only place to confirm.
-3. **Service worker interference.** The embed HTML at `web-apps/apps/documenteditor/embed/index.html:137` registers `document_editor_service_worker.js` (but the registration code is preceded by `+function registerServiceWorker(){return;` which short-circuits). The vendor bundle may have a separate registration. Could intercept or break font XHRs.
-4. **WASM engine bug with the specific TTF/TTC buffers** — but the buffers are valid TTF/TTC and the engine is from the same vendor that produces them. Unlikely.
-5. **XOR decode in the browser differs from the script's encode.** Verified: keys match in both source and the deployed AllFonts.js. Unlikely.
-6. **Browser-specific bug** (Safari/Firefox/Chrome quirk with the `Uint8Array` XOR in-place mutation). Not yet ruled in or out.
+1. **Empty `g_fonts_selection_bin` makes the font picker resolve real names to `ASCW3`.** This matches correct copied text plus wrong symbol/box glyphs. Cache21 is testing the durable generated-selection-bin fix.
+2. **XHR failing in the iframe at runtime** (e.g. due to service worker, cache, CSP, or a CORS-like block) — the SDK falls back to placeholder glyphs. The user can verify by opening DevTools Network tab in the browser and looking for requests to `odttf10-*`. Need: URL, status, response size.
+3. **Font picker is picking a name that exists in `g_font_infos` but maps to a face index that does not match what the WASM engine expects.** Static analysis is clean; runtime is the only place to confirm.
+4. **Service worker interference.** The embed HTML at `web-apps/apps/documenteditor/embed/index.html:137` registers `document_editor_service_worker.js` (but the registration code is preceded by `+function registerServiceWorker(){return;` which short-circuits). The vendor bundle may have a separate registration. Could intercept or break font XHRs.
+5. **WASM engine bug with the specific TTF/TTC buffers** — but the buffers are valid TTF/TTC and the engine is from the same vendor that produces them. Unlikely.
+6. **XOR decode in the browser differs from the script's encode.** Verified: keys match in both source and the deployed AllFonts.js. Unlikely.
+7. **Browser-specific bug** (Safari/Firefox/Chrome quirk with the `Uint8Array` XOR in-place mutation). Not yet ruled in or out.
 
 ---
 
 ## Next steps (in order)
 
-1. **Capture actual XHRs from the browser.** User opens DevTools Network tab, hard-reload, type `Hello!`, screenshot or copy the network log for `odttf10-*` requests. Need: URL, status, response size. If status is 200 with correct size, the bug is downstream; if 404/0, the path is wrong at runtime.
-2. **Capture `[KinOfficeBrowser ...]` console logs** for "font registry" / "font load request" / "font load complete" lines. Currently the diagnostics are installed in the parent window only and won't fire; need to also install them in the nested iframe (either via iframe contentWindow eval, or by modifying the iframe HTML).
-3. **Set up `window.onLogPickFont`** in the nested iframe to log every font-picker decision. The source has explicit hooks for this in `map.js:2933` and `character.js:154` that fire when the picker resolves a glyph to a font name.
-4. **Override `g_font_loader.fontFilesPath`** from the parent (after iframe load) to an absolute path computed from `window.location.origin` + the iframe's known `repository/.../7/fonts/` directory. This is a no-op if the relative path is correct, but a safety net if the iframe's base URL is unexpected.
-5. **Disable the service worker** temporarily by hard-reload + clear site data, to rule out a service worker intercept.
-6. **Add a `window.onerror` + `window.addEventListener('unhandledrejection', ...)` listener** in the parent to catch any silent error from the SDK initialization that may explain the symptom.
-7. **Reproduce in an isolated test page** that just loads `AllFonts.js` + a single `sdk-all-min.js` and tries to fetch one font file via the same relative path the iframe would use. This will narrow down whether the bug is path-related, browser-related, or SDK-related.
+1. Deploy `20260606-cache21` and test `Debug Arial Test.docx`.
+2. Look for `selectionBinBytes` greater than zero and `FontPicker: Arial => Arial` or `FontPicker: Times New Roman => Times New Roman`.
+3. If the picker no longer chooses `ASCW3` but text is still boxes, inspect `font load complete` headers and WASM font registration next.
+4. Capture actual Network tab XHRs only if the injected XHR logs are missing or ambiguous.
+5. Do not repeat CJK fallback, Office alias catalog changes, or cache20's minified `vE` override unless new logs prove those exact paths are the problem.
 
 ---
 

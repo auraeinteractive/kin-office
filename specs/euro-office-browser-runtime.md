@@ -144,6 +144,7 @@ Euro-Office document/canvas rendering does not use browser HTML fonts. The canva
 `AllFonts.js` defines:
 
 ```text
+window.g_fonts_selection_bin
 window.__fonts_files
 window.__fonts_infos
 ```
@@ -156,6 +157,9 @@ Each family entry has:
 
 Important loader behavior found in source:
 
+- `sdkjs/common/libfont/map.js` uses `window.g_fonts_selection_bin` to build the selectable font list used by `AscFonts.g_fontApplication.GetFontFileWeb()`.
+- If `g_fonts_selection_bin` is empty, the packaged `__fonts_infos` catalog can still exist, but the picker may resolve document font names through a nearly empty selection list and fall back to special font `ASCW3`.
+- `ASCW3` is not a normal Latin document font. If normal text resolves to it, copied text can remain correct while canvas glyphs render as boxes/symbols.
 - `sdkjs/common/Drawings/Externals.js` loads `basePath + font.Id`.
 - Before passing a font stream to FreeType, it XOR-decodes the first 32 bytes with Euro-Office's ODTTF key.
 - Therefore generated browser font files must be ODTTF-obfuscated on disk.
@@ -167,6 +171,7 @@ Current generator behavior:
 - The first 32 bytes are XOR-obfuscated before writing.
 - Latin aliases such as `Arial`, `Calibri`, and `Segoe UI` map to Liberation/Noto fonts.
 - CJK aliases such as `等线`, `DengXian`, `Microsoft YaHei`, `SimSun`, `NSimSun`, `黑体`, and `宋体` map to the Simplified Chinese face in `NotoSansCJK-*.ttc`.
+- Current generator writes a minimal Euro-Office v2 `g_fonts_selection_bin` from the same packaged `__fonts_infos` list. This is required because the native picker searches the selection bin first; with an empty bin, `Arial`, `Times New Roman`, and other normal names resolved to the special `ASCW3` font. **Resolved in `20260606-cache22`** — see `specs/problems/font-problem.md`.
 
 Failed font-catalog attempt:
 
