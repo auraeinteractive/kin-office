@@ -6,9 +6,6 @@
                 appTag: 'kinoffice_docs',
                 menuPrefix: 'kinoffice.docs',
                 defaultFilename: 'Document.docx',
-                debugDefaultDocumentUrl: './debug/test.docx',
-                debugDefaultFilename: 'Debug Arial Test.docx',
-                debugForceDefaultDocument: true,
                 fileType: 'docx',
                 windowTitle: 'Docs'
             });

@@ -1,8 +1,8 @@
 {
   "id": "kinoffice_docs",
   "displayName": "Docs",
-  "version": "30",
-  "entry": "app_debug_20260606_cache25.js",
+  "version": "31",
+  "entry": "main.js",
   "category": "Office",
   "published": true
 }

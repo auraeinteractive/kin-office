@@ -1,6 +1,6 @@
 ( function() {
     var BUILD_ID = '20260606-cache25';
-    var DOCS_ENTRY = 'app_debug_20260606_cache25.js';
+    var DOCS_ENTRY = 'app.js';
 
     function qp( name ) {
         try {
