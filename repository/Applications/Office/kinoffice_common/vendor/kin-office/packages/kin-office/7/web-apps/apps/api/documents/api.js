@@ -1186,7 +1186,7 @@
     }
 
     function getAppParameters(config) {
-        var params = "?_dc=20260606-cache22";
+        var params = "?_dc=20260606-cache25";
 
         if (config.editorConfig && config.editorConfig.lang)
             params += "&lang=" + config.editorConfig.lang;

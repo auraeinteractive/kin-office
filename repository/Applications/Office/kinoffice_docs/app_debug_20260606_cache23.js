@@ -1,6 +1,6 @@
 (function() {
-    console.log('kinoffice_docs app direct entry 20260606-cache25', window.location.href);
-    import('../kinoffice_common/office_app.js?kinOfficeBuild=20260606-cache25')
+    console.log('kinoffice_docs debug entry 20260606-cache23', window.location.href);
+    import('../kinoffice_common/office_app.js?kinOfficeBuild=20260606-cache23')
         .then(function(mod) {
             mod.bootstrapKinOfficeApp({
                 appTag: 'kinoffice_docs',
@@ -14,6 +14,6 @@
             });
         })
         .catch(function(error) {
-            console.error('kinoffice_docs app direct entry failed', error);
+            console.error('kinoffice_docs debug entry failed', error);
         });
 })();

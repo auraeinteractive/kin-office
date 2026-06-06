@@ -4,9 +4,23 @@
 
 **Date opened:** 2026-06-04  
 **Date resolved:** 2026-06-06  
-**Build id:** `20260606-cache22`
+**Build id:** `20260606-cache25`
 
-**Why it was fixed:** Euro-Office's native font picker does not search `__fonts_infos` directly. It first parses `window.g_fonts_selection_bin` into selectable font records. Kin Office's generated `AllFonts.js` left that bin empty, so ordinary names like `Arial` and `Times New Roman` fell through to the bundled symbol font `ASCW3`. That kept document text correct when copied (Unicode was fine) but made the canvas render digit/box glyphs and broke the font dropdown. The durable fix is in `scripts/generate-kinoffice-allfonts.py`: it now emits a valid Euro-Office v2 `g_fonts_selection_bin` with one selectable record per packaged family/alias, each pointing at the matching `odttf10-*` file. After regenerating `AllFonts.js` and deploying cache22, the picker resolves `Arial => Arial` and canvas text renders normally.
+**Why canvas rendering was fixed (cache22):** Euro-Office's native font picker does not search `__fonts_infos` directly. It first parses `window.g_fonts_selection_bin` into selectable font records. Kin Office's generated `AllFonts.js` left that bin empty, so ordinary names like `Arial` and `Times New Roman` fell through to the bundled symbol font `ASCW3`. That kept document text correct when copied (Unicode was fine) but made the canvas render digit/box glyphs. The durable fix is in `scripts/generate-kinoffice-allfonts.py`: it now emits a valid Euro-Office v2 `g_fonts_selection_bin` with one selectable record per packaged family/alias, each pointing at the matching `odttf10-*` file. After regenerating `AllFonts.js` and deploying cache22, the picker resolves `Arial => Arial` and canvas text renders normally.
+
+**Why font dropdown labels were broken in Docs only (cache25):** Euro-Office's `ComboBoxFonts` renders dropdown names as canvas sprite rows from `fonts_thumbnail*.png.bin`, not plain text. Kin disables those thumbnails (`imgidx:-1`) and ships transparent fallback sprites, so each `<a class="font-item">` is visually empty unless a text label is added. The vendor patch in `main/app.js` is identical for Docs, Sheets, and Slides, but Docs still showed blank rows because:
+
+1. **Docs toolbar uses `recent: 5` by default.** That enables the "recent fonts" code path, which calls `flushVisibleFontsTiles()` and `updateVisibleFontsTiles()` every time the menu opens. With `imgidx:-1`, no sprite is drawn and nothing else filled the row. Sheets' formula-bar font picker uses `recent: 0`, which skips that refresh path — which is why Sheets/Slides looked fine while Docs did not.
+2. **`kinoffice_docs/main.js` pointed at a stale debug entry (`cache22`)** while the manifest had moved forward, so Docs sessions could lag behind Sheets/Slides during iterative testing.
+
+**Font dropdown label fix (cache25):**
+
+- Embed each font `name` in the combobox HTML template (`<span class="font-item-label">`) via `FONT_COMBO_TEMPLATE_*` in `scripts/patch-euro-office-save-hooks.py`.
+- When `imgidx < 0`, inject a text `<span class="font-item-label">` at tile-render time instead of skipping silently (`FONT_COMBO_TILE_LABEL_*`).
+- Set Docs toolbar `cmbFontName` to `recent: 0` (same as Sheets formula bar).
+- Inject a Docs-only inner-iframe hook in `documenteditor/main/index.html` that fills labels on `fonts:load` and `show:after`.
+- Add a parent-side docx hook in `browser_editor_adapter.js` as a belt-and-suspenders fallback.
+- Align `kinoffice_docs/main.js` with manifest entry `app_debug_20260606_cache25.js`.
 
 ---
 
@@ -20,7 +34,7 @@ When opening a new document in the Kin Office Docs app and typing ASCII text, gl
 - Run-level styling (color, size) is preserved
 - The actual text content is correct — copying and pasting the "00000" yields `Hello`
 
-The font dropdown UI is also broken: the list of font names appears blank, and style/gallery previews render the same box glyphs as the document canvas.
+The font dropdown UI was also broken in Docs: the list of font names appeared blank (empty `<a class="font-item">` rows), while Sheets and Slides showed names correctly. Style/gallery previews rendered the same box glyphs as the document canvas before the canvas fix.
 
 Important current clue: copying the visible box text from the document and pasting it elsewhere yields the correct Unicode text:
 
@@ -32,7 +46,7 @@ How are you doing?
 
 That means the DOCX/open/x2t text content is intelligible. The failure is in Euro-Office's canvas font selection/rendering path, not in the document text payload.
 
-This affects at least the Docs kin app; behaviour in Sheets/Slides is not yet observed.
+Canvas rendering affected Docs (and would affect Sheets/Slides the same way). Font dropdown label display was Docs-only after cache22; resolved in cache25.
 
 ---
 
@@ -317,33 +331,22 @@ Cache21 change:
 
 ## Current state
 
-- **Resolved in `20260606-cache22`.** Typed ASCII, imported DOCX text, font dropdown names, and style previews render with packaged fonts instead of `ASCW3` symbol glyphs.
-- `AllFonts.js` now includes a non-empty `g_fonts_selection_bin` generated alongside `__fonts_files` and `__fonts_infos`.
+- **Canvas rendering resolved in `20260606-cache22`.** Typed ASCII, imported DOCX text, font selection, and style previews render with packaged fonts instead of `ASCW3` symbol glyphs.
+- **Font dropdown labels resolved in `20260606-cache25`.** Docs dropdown rows show font names (e.g. Arial, Times New Roman). Verified by user after deploy.
+- `AllFonts.js` includes a non-empty `g_fonts_selection_bin` generated alongside `__fonts_files` and `__fonts_infos`.
+- Font dropdown labels use three layers in `scripts/patch-euro-office-save-hooks.py`: HTML template text, runtime tile label injection when sprites are disabled, and Docs-only iframe/parent hooks.
 - Inner-iframe font diagnostics remain in `scripts/patch-euro-office-save-hooks.py` and `browser_editor_adapter.js` for future debugging; they are not required for correct rendering once the selection bin is populated.
 
 ---
 
-## Hypotheses (not yet verified)
+## Resolved hypotheses
 
-In rough order of likelihood:
+1. **Empty `g_fonts_selection_bin` made the font picker resolve real names to `ASCW3`.** Confirmed. Fixed by generating a valid selection bin in `scripts/generate-kinoffice-allfonts.py` (cache22).
+2. **Docs font dropdown labels blank despite identical vendor patches.** Confirmed. Caused by Docs `recent: 5` menu refresh with disabled sprite thumbnails; fixed in cache25 (see above).
 
-1. **Empty `g_fonts_selection_bin` makes the font picker resolve real names to `ASCW3`.** This matches correct copied text plus wrong symbol/box glyphs. Cache21 is testing the durable generated-selection-bin fix.
-2. **XHR failing in the iframe at runtime** (e.g. due to service worker, cache, CSP, or a CORS-like block) — the SDK falls back to placeholder glyphs. The user can verify by opening DevTools Network tab in the browser and looking for requests to `odttf10-*`. Need: URL, status, response size.
-3. **Font picker is picking a name that exists in `g_font_infos` but maps to a face index that does not match what the WASM engine expects.** Static analysis is clean; runtime is the only place to confirm.
-4. **Service worker interference.** The embed HTML at `web-apps/apps/documenteditor/embed/index.html:137` registers `document_editor_service_worker.js` (but the registration code is preceded by `+function registerServiceWorker(){return;` which short-circuits). The vendor bundle may have a separate registration. Could intercept or break font XHRs.
-5. **WASM engine bug with the specific TTF/TTC buffers** — but the buffers are valid TTF/TTC and the engine is from the same vendor that produces them. Unlikely.
-6. **XOR decode in the browser differs from the script's encode.** Verified: keys match in both source and the deployed AllFonts.js. Unlikely.
-7. **Browser-specific bug** (Safari/Firefox/Chrome quirk with the `Uint8Array` XOR in-place mutation). Not yet ruled in or out.
+## Hypotheses not implicated in the final fix
 
----
-
-## Next steps (in order)
-
-1. Deploy `20260606-cache21` and test `Debug Arial Test.docx`.
-2. Look for `selectionBinBytes` greater than zero and `FontPicker: Arial => Arial` or `FontPicker: Times New Roman => Times New Roman`.
-3. If the picker no longer chooses `ASCW3` but text is still boxes, inspect `font load complete` headers and WASM font registration next.
-4. Capture actual Network tab XHRs only if the injected XHR logs are missing or ambiguous.
-5. Do not repeat CJK fallback, Office alias catalog changes, or cache20's minified `vE` override unless new logs prove those exact paths are the problem.
+- XHR failures, WASM buffer bugs, XOR decode mismatch, and service worker interference were investigated but were not the root cause of the reported symptoms once the selection bin and dropdown label paths were fixed.
 
 ---
 

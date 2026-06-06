@@ -1,7 +1,7 @@
 (function() {
     'use strict';
 
-    var BUILD_ID = '20260606-cache22';
+    var BUILD_ID = '20260606-cache25';
     var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js?kinOfficeBuild=' + BUILD_ID;
     var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js?kinOfficeBuild=' + BUILD_ID;
     var apiPromise = null;
@@ -232,7 +232,7 @@
         return info && (info.Name || info.ya);
     }
 
-    function installInnerFontProbe(reason) {
+    function installInnerFontProbe(reason, fileType) {
         var inner = getInnerWindow();
         var fonts = inner.AscFonts;
         var loader = inner.AscCommon && inner.AscCommon.g_font_loader;
@@ -306,7 +306,47 @@
             });
         }
         installInnerPackagedFontPicker(inner, fonts);
+        installInnerFontDropdownLabels(inner, fileType);
         return true;
+    }
+
+    function installInnerFontDropdownLabels(inner, fileType) {
+        if (fileType !== 'docx') return;
+        try {
+            if (inner._kinParentFontDropdownLabelsInstalled) return;
+            var app = inner.DE;
+            if (!app || typeof app.getController !== 'function') return;
+            var toolbarCtrl = app.getController('Toolbar');
+            var combo = toolbarCtrl && toolbarCtrl.toolbar && toolbarCtrl.toolbar.cmbFontName;
+            if (!combo || !combo.store || !combo.el) return;
+            inner._kinParentFontDropdownLabelsInstalled = true;
+
+            function ensureLabels() {
+                var $ = inner.$ || inner.jQuery;
+                if (!$) return;
+                $(combo.el).find('a.font-item').each(function(index, anchor) {
+                    if (anchor.querySelector('.font-item-label')) return;
+                    var li = anchor.closest('li');
+                    var record = li && li.id ? combo.store.get(li.id) : combo.store.at(index);
+                    var name = record && record.get ? record.get('name') : '';
+                    if (!name) return;
+                    var span = inner.document.createElement('span');
+                    span.className = 'font-item-label';
+                    span.textContent = name;
+                    span.style.cssText = 'display:inline-block;padding:0 8px;line-height:28px;position:relative;z-index:1;';
+                    anchor.appendChild(span);
+                });
+            }
+
+            combo.on('show:after', ensureLabels);
+            if (inner.Common && inner.Common.NotificationCenter) {
+                inner.Common.NotificationCenter.on('fonts:load', function() {
+                    inner.setTimeout(ensureLabels, 0);
+                });
+            }
+            ensureLabels();
+            debugLog('parent font dropdown labels installed');
+        } catch (_error) {}
     }
 
     function installInnerPackagedFontPicker(inner, fonts) {
@@ -406,9 +446,9 @@
         });
     }
 
-    function watchInnerFontProbe(reason, attemptsLeft) {
+    function watchInnerFontProbe(reason, attemptsLeft, fileType) {
         try {
-            if (installInnerFontProbe(reason)) return;
+            if (installInnerFontProbe(reason, fileType)) return;
             if ((attemptsLeft || 0) === 300 || (attemptsLeft || 0) % 50 === 0) {
                 var inner = getInnerWindow();
                 debugLog('parent font probe:waiting', {
@@ -436,7 +476,7 @@
             return;
         }
         setTimeout(function() {
-            watchInnerFontProbe(reason, attemptsLeft - 1);
+            watchInnerFontProbe(reason, attemptsLeft - 1, fileType);
         }, 100);
     }
 
@@ -975,7 +1015,7 @@
                     onAppReady: function() {
                         try {
                             debugLog('onAppReady', fileName, fileType);
-                            watchInnerFontProbe('onAppReady', 300);
+                            watchInnerFontProbe('onAppReady', 300, fileType);
                             if (!editor || typeof editor.openDocument !== 'function') {
                                 throw new Error('Kin Office binary open API is not available.');
                             }
@@ -985,12 +1025,12 @@
                             });
                             setTimeout(function() {
                                 try {
-                                    watchInnerFontProbe('before openDocument', 300);
+                                    watchInnerFontProbe('before openDocument', 300, fileType);
                                     debugLog('open binary', fileName, fileType);
                                     editor.openDocument({
                                         buffer: payloadToArrayBuffer(sourcePayload)
                                     });
-                                    watchInnerFontProbe('after openDocument', 300);
+                                    watchInnerFontProbe('after openDocument', 300, fileType);
                                     watchInnerDocumentReady(300);
                                 } catch (error) {
                                     debugLog('open binary failed', error && error.message ? error.message : String(error));

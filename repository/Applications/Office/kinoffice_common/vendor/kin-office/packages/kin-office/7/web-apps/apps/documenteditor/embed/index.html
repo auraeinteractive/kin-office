@@ -185,7 +185,7 @@ const isIE=/msie|trident/i.test(navigator.userAgent);var checkLocalStorage=funct
         </script>
        <script>
 +function kinOfficeFontDebug(){
-    var build = "20260606-cache22";
+    var build = "20260606-cache25";
     function send(topic, data) {
         try {
             var payload = {type: "kinOfficeFontDebug", build: build, topic: topic, data: data || {}};
@@ -427,13 +427,61 @@ const isIE=/msie|trident/i.test(navigator.userAgent);var checkLocalStorage=funct
         });
         return true;
     }
+    function ensureFontDropdownLabels() {
+        try {
+            if (!/\/documenteditor\//.test(String(window.location.href || ""))) return;
+            var app = window.DE;
+            if (!app || typeof app.getController !== "function") return;
+            var toolbarCtrl = app.getController("Toolbar");
+            var combo = toolbarCtrl && toolbarCtrl.toolbar && toolbarCtrl.toolbar.cmbFontName;
+            if (!combo || !combo.store || !combo.el) return;
+            var $ = window.$ || window.jQuery;
+            if (!$) return;
+            $(combo.el).find("a.font-item").each(function(index, anchor) {
+                if (anchor.querySelector(".font-item-label")) return;
+                var li = anchor.closest("li");
+                var record = li && li.id ? combo.store.get(li.id) : combo.store.at(index);
+                var name = record && record.get ? record.get("name") : "";
+                if (!name) return;
+                var span = document.createElement("span");
+                span.className = "font-item-label";
+                span.textContent = name;
+                span.style.cssText = "display:inline-block;padding:0 8px;line-height:28px;position:relative;z-index:1;";
+                anchor.appendChild(span);
+            });
+        } catch (_error) {}
+    }
+    function installFontDropdownLabels() {
+        try {
+            if (!/\/documenteditor\//.test(String(window.location.href || ""))) return;
+            if (window._kinFontDropdownLabelsInstalled) return;
+            var app = window.DE;
+            if (!app || typeof app.getController !== "function") return;
+            var toolbarCtrl = app.getController("Toolbar");
+            var combo = toolbarCtrl && toolbarCtrl.toolbar && toolbarCtrl.toolbar.cmbFontName;
+            if (!combo) return;
+            window._kinFontDropdownLabelsInstalled = true;
+            combo.on("show:after", ensureFontDropdownLabels);
+            if (window.Common && Common.NotificationCenter) {
+                Common.NotificationCenter.on("fonts:load", function() {
+                    window.setTimeout(ensureFontDropdownLabels, 0);
+                });
+            }
+            ensureFontDropdownLabels();
+            send("font dropdown labels installed", {});
+        } catch (_error) {}
+    }
     var attempts = 0;
     var timer = window.setInterval(function() {
         attempts += 1;
         var installed = install();
+        installFontDropdownLabels();
+        ensureFontDropdownLabels();
         if (attempts >= 150 || (installed && window.AscCommon && window.AscCommon.g_font_loader)) {
             window.clearInterval(timer);
             install();
+            installFontDropdownLabels();
+            ensureFontDropdownLabels();
             send("font debug ready", {attempts: attempts});
         }
     }, 100);
@@ -484,8 +532,8 @@ const isIE=/msie|trident/i.test(navigator.userAgent);var checkLocalStorage=funct
       </script>
 
       <!--sdk-->
-      <script type="text/javascript" src="../../../../sdkjs/common/AllFonts.js?kinOfficeBuild=20260606-cache22"></script>
-      <script type="text/javascript" src="../../../../sdkjs/word/sdk-all-min.js?kinOfficeBuild=20260606-cache22"></script>
+      <script type="text/javascript" src="../../../../sdkjs/common/AllFonts.js?kinOfficeBuild=20260606-cache25"></script>
+      <script type="text/javascript" src="../../../../sdkjs/word/sdk-all-min.js?kinOfficeBuild=20260606-cache25"></script>
 
       <!--application-->
       <script>
@@ -498,7 +546,7 @@ function checkExtendedPDF(directUrl,key,url,token,callback){var limit=300;if(dir
           function startApp() {
               var script = document.createElement("script");
               script.type  = "text/javascript";
-              script.src = "../../../apps/documenteditor/embed/app-all.js?kinOfficeBuild=20260606-cache22";
+              script.src = "../../../apps/documenteditor/embed/app-all.js?kinOfficeBuild=20260606-cache25";
               document.body.appendChild(script);
           }
           if (isForm===undefined) {

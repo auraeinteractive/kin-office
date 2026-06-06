@@ -110,7 +110,7 @@ export function bootstrapKinOfficeApp(config) {
 
     const iframeEl = ensureKinOfficeIframeShell();
     const ORIGIN = window.location.origin;
-    const KIN_OFFICE_BUILD_ID = '20260606-cache22';
+    const KIN_OFFICE_BUILD_ID = '20260606-cache25';
     const LOCAL_EDITOR_URL = new URL('./browser_editor.html?kinOfficeBuild=' + KIN_OFFICE_BUILD_ID, import.meta.url).href;
     const params = new URLSearchParams(window.location.search);
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';

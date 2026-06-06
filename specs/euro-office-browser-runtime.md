@@ -172,6 +172,7 @@ Current generator behavior:
 - Latin aliases such as `Arial`, `Calibri`, and `Segoe UI` map to Liberation/Noto fonts.
 - CJK aliases such as `等线`, `DengXian`, `Microsoft YaHei`, `SimSun`, `NSimSun`, `黑体`, and `宋体` map to the Simplified Chinese face in `NotoSansCJK-*.ttc`.
 - Current generator writes a minimal Euro-Office v2 `g_fonts_selection_bin` from the same packaged `__fonts_infos` list. This is required because the native picker searches the selection bin first; with an empty bin, `Arial`, `Times New Roman`, and other normal names resolved to the special `ASCW3` font. **Resolved in `20260606-cache22`** — see `specs/problems/font-problem.md`.
+- The font combobox UI normally paints each font name from `fonts_thumbnail*.png.bin` sprite rows. Kin ships transparent fallback sprites and sets `imgidx:-1`, so cache24 embeds plain-text font names in the combobox menu template instead of relying on lazy sprite tiles.
 
 Failed font-catalog attempt:
 

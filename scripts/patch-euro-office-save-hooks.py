@@ -8,7 +8,48 @@ import sys
 
 SAVE_HOOK = "(window.KinOfficeDirectSave && window.KinOfficeDirectSave())"
 UPSTREAM_PRODUCT_TOKEN = "ONLY" + "OFFICE"
-KIN_OFFICE_BUILD_ID = "20260606-cache22"
+KIN_OFFICE_BUILD_ID = "20260606-cache25"
+
+FONT_COMBO_TEMPLATE_OLD = 'style="height:<%=scope.getListItemHeight()%>px;"></a>'
+FONT_COMBO_TEMPLATE_NEW = (
+    'style="height:<%=scope.getListItemHeight()%>px;">'
+    '<span class="font-item-label" style="display:inline-block;padding:0 8px;line-height:28px;">'
+    "<%= item.name %></span></a>"
+)
+FONT_COMBO_TILE_LABEL_N = (
+    's=Math.floor(i.store.at(n).get("imgidx")/r);'
+    'if(s<0){var p=$(d[n]).get(0);if(p&&!p.querySelector(".font-item-label")){'
+    'var m=document.createElement("span");m.className="font-item-label";'
+    'm.textContent=i.store.at(n).get("name")||"";'
+    'm.style.cssText="display:inline-block;padding:0 8px;line-height:28px;position:relative;z-index:1;";'
+    'p.appendChild(m)}continue;}'
+    "var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)"
+)
+FONT_COMBO_TILE_LABEL_O = (
+    's=Math.floor(i.store.at(o).get("imgidx")/r);'
+    'if(s<0){var p=$(d[o]).get(0);if(p&&!p.querySelector(".font-item-label")){'
+    'var m=document.createElement("span");m.className="font-item-label";'
+    'm.textContent=i.store.at(o).get("name")||"";'
+    'm.style.cssText="display:inline-block;padding:0 8px;line-height:28px;position:relative;z-index:1;";'
+    'p.appendChild(m)}continue;}'
+    "var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)"
+)
+FONT_COMBO_TILE_SKIP_N = (
+    's=Math.floor(i.store.at(n).get("imgidx")/r);if(s<0)continue;'
+    "var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)"
+)
+FONT_COMBO_TILE_SKIP_O = (
+    's=Math.floor(i.store.at(o).get("imgidx")/r);if(s<0)continue;'
+    "var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)"
+)
+DOCS_FONT_COMBO_RECENT_OLD = (
+    'cmbFontName=new Common.UI.ComboBoxFonts({cls:"input-group-nr",menuCls:"scrollable-menu",'
+    'menuStyle:"min-width: 325px;",lock:'
+)
+DOCS_FONT_COMBO_RECENT_NEW = (
+    'cmbFontName=new Common.UI.ComboBoxFonts({cls:"input-group-nr",menuCls:"scrollable-menu",'
+    'menuStyle:"min-width: 325px;",recent:0,lock:'
+)
 
 
 REPLACEMENTS = {
@@ -24,6 +65,17 @@ REPLACEMENTS = {
     "../../../../sdkjs/source-loader/word.js": "../../../../sdkjs/word/sdk-all-min.js",
     "../../../../sdkjs/source-loader/cell.js": "../../../../sdkjs/cell/sdk-all-min.js",
     "../../../../sdkjs/source-loader/slide.js": "../../../../sdkjs/slide/sdk-all-min.js",
+    FONT_COMBO_TEMPLATE_OLD: FONT_COMBO_TEMPLATE_NEW,
+    FONT_COMBO_TILE_SKIP_N: FONT_COMBO_TILE_LABEL_N,
+    FONT_COMBO_TILE_SKIP_O: FONT_COMBO_TILE_LABEL_O,
+    's=Math.floor(i.store.at(n).get("imgidx")/r);if(s<0)continue;var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)':
+        FONT_COMBO_TILE_LABEL_N,
+    's=Math.floor(i.store.at(n).get("imgidx")/r);var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)':
+        FONT_COMBO_TILE_LABEL_N,
+    's=Math.floor(i.store.at(o).get("imgidx")/r);if(s<0)continue;var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)':
+        FONT_COMBO_TILE_LABEL_O,
+    's=Math.floor(i.store.at(o).get("imgidx")/r);var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)':
+        FONT_COMBO_TILE_LABEL_O,
 }
 
 EDITOR_SDK_ALIASES = {
@@ -290,13 +342,61 @@ KIN_FONT_DEBUG_SCRIPT = """\
         });
         return true;
     }
+    function ensureFontDropdownLabels() {
+        try {
+            if (!/\\/documenteditor\\//.test(String(window.location.href || ""))) return;
+            var app = window.DE;
+            if (!app || typeof app.getController !== "function") return;
+            var toolbarCtrl = app.getController("Toolbar");
+            var combo = toolbarCtrl && toolbarCtrl.toolbar && toolbarCtrl.toolbar.cmbFontName;
+            if (!combo || !combo.store || !combo.el) return;
+            var $ = window.$ || window.jQuery;
+            if (!$) return;
+            $(combo.el).find("a.font-item").each(function(index, anchor) {
+                if (anchor.querySelector(".font-item-label")) return;
+                var li = anchor.closest("li");
+                var record = li && li.id ? combo.store.get(li.id) : combo.store.at(index);
+                var name = record && record.get ? record.get("name") : "";
+                if (!name) return;
+                var span = document.createElement("span");
+                span.className = "font-item-label";
+                span.textContent = name;
+                span.style.cssText = "display:inline-block;padding:0 8px;line-height:28px;position:relative;z-index:1;";
+                anchor.appendChild(span);
+            });
+        } catch (_error) {}
+    }
+    function installFontDropdownLabels() {
+        try {
+            if (!/\\/documenteditor\\//.test(String(window.location.href || ""))) return;
+            if (window._kinFontDropdownLabelsInstalled) return;
+            var app = window.DE;
+            if (!app || typeof app.getController !== "function") return;
+            var toolbarCtrl = app.getController("Toolbar");
+            var combo = toolbarCtrl && toolbarCtrl.toolbar && toolbarCtrl.toolbar.cmbFontName;
+            if (!combo) return;
+            window._kinFontDropdownLabelsInstalled = true;
+            combo.on("show:after", ensureFontDropdownLabels);
+            if (window.Common && Common.NotificationCenter) {
+                Common.NotificationCenter.on("fonts:load", function() {
+                    window.setTimeout(ensureFontDropdownLabels, 0);
+                });
+            }
+            ensureFontDropdownLabels();
+            send("font dropdown labels installed", {});
+        } catch (_error) {}
+    }
     var attempts = 0;
     var timer = window.setInterval(function() {
         attempts += 1;
         var installed = install();
+        installFontDropdownLabels();
+        ensureFontDropdownLabels();
         if (attempts >= 150 || (installed && window.AscCommon && window.AscCommon.g_font_loader)) {
             window.clearInterval(timer);
             install();
+            installFontDropdownLabels();
+            ensureFontDropdownLabels();
             send("font debug ready", {attempts: attempts});
         }
     }, 100);
@@ -304,7 +404,7 @@ KIN_FONT_DEBUG_SCRIPT = """\
 </script>"""
 
 
-def patch_html_runtime_deps(text: str) -> str:
+def patch_html_runtime_deps(text: str, path: Path | None = None) -> str:
     updated = text
     # Kin runs in a browser iframe, not the native desktop shell.
     updated = updated.replace(IS_NATIVE_EDITOR_SCRIPT + "\n", "")
@@ -359,6 +459,8 @@ def patch_html_runtime_deps(text: str) -> str:
             "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>",
             "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>\n       " + font_debug_script,
         )
+    if "kinOfficeFontDebug" not in updated and path and "documenteditor/main" in str(path) and "</head>" in updated:
+        updated = updated.replace("</head>", font_debug_script + "\n</head>", 1)
     updated = re.sub(
         r'(<script type="text/javascript" src="../../../../sdkjs/common/AllFonts\.js)(?:\?kinOfficeBuild=[^"]*)?("></script>)',
         rf'\1?kinOfficeBuild={KIN_OFFICE_BUILD_ID}\2',
@@ -390,7 +492,7 @@ def patch_file(path: Path) -> int:
     for old, new in REPLACEMENTS.items():
         text = text.replace(old, new)
     if path.suffix == ".html":
-        text = patch_html_runtime_deps(text)
+        text = patch_html_runtime_deps(text, path)
     if "require.config({baseUrl:\"../../\",paths:" in text:
         text = text.replace(
             "require.config({baseUrl:\"../../\",paths:",
@@ -414,6 +516,9 @@ def patch_file(path: Path) -> int:
         "urlArgs:\"kinOfficeBuild=20260606-cache19\",",
         "urlArgs:\"kinOfficeBuild=20260606-cache20\",",
         "urlArgs:\"kinOfficeBuild=20260606-cache21\",",
+        "urlArgs:\"kinOfficeBuild=20260606-cache22\",",
+        "urlArgs:\"kinOfficeBuild=20260606-cache23\",",
+        "urlArgs:\"kinOfficeBuild=20260606-cache24\",",
     ]
     for previous in previous_url_args:
         text = text.replace(previous, f"urlArgs:\"kinOfficeBuild={KIN_OFFICE_BUILD_ID}\",")
@@ -471,13 +576,18 @@ def patch_file(path: Path) -> int:
         f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
     )
     text = text.replace(
-        's=Math.floor(i.store.at(n).get("imgidx")/r);var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)',
-        's=Math.floor(i.store.at(n).get("imgidx")/r);if(s<0)continue;var m=i.spriteThumbs.getImage(s);i.tiles[n]=m,$(d[n]).get(0).appendChild(m)',
+        'var params = "?_dc=20260606-cache23";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
     )
     text = text.replace(
-        's=Math.floor(i.store.at(o).get("imgidx")/r);var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)',
-        's=Math.floor(i.store.at(o).get("imgidx")/r);if(s<0)continue;var m=i.spriteThumbs.getImage(s);i.tiles[o]=m,$(d[o]).get(0).appendChild(m)',
+        'var params = "?_dc=20260606-cache24";',
+        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
     )
+    text = text.replace(FONT_COMBO_TEMPLATE_OLD, FONT_COMBO_TEMPLATE_NEW)
+    text = text.replace(FONT_COMBO_TILE_SKIP_N, FONT_COMBO_TILE_LABEL_N)
+    text = text.replace(FONT_COMBO_TILE_SKIP_O, FONT_COMBO_TILE_LABEL_O)
+    if "documenteditor" in path.parts:
+        text = text.replace(DOCS_FONT_COMBO_RECENT_OLD, DOCS_FONT_COMBO_RECENT_NEW)
     while f"{SAVE_HOOK} || {SAVE_HOOK} ||" in text:
         text = text.replace(f"{SAVE_HOOK} || {SAVE_HOOK} ||", f"{SAVE_HOOK} ||")
     if text != original:
