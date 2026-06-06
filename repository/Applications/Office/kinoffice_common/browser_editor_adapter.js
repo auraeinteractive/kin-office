@@ -1,26 +1,12 @@
 (function() {
     'use strict';
 
-    var BUILD_ID = '20260606-cache25';
-    var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js?kinOfficeBuild=' + BUILD_ID;
-    var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js?kinOfficeBuild=' + BUILD_ID;
+    var API_URL = 'vendor/kin-office/packages/kin-office/7/web-apps/apps/api/documents/api.js';
+    var X2T_URL = 'vendor/kin-office/packages/kin-office/7/wasm/x2t/x2t.js';
     var apiPromise = null;
     var x2tPromise = null;
     var cachePurgePromise = null;
     var workingDirsReady = false;
-    var DEBUG_PREFIX = '[KinOfficeBrowser ' + BUILD_ID + ']';
-
-    function debugLog() {
-        try {
-            console.log.apply(console, [DEBUG_PREFIX].concat(Array.prototype.slice.call(arguments)));
-        } catch (_error) {}
-    }
-
-    window.addEventListener('message', function(event) {
-        var data = event && event.data;
-        if (!data || data.type !== 'kinOfficeFontDebug') return;
-        debugLog('inner font debug', data.topic, data.data || {});
-    });
 
     function loadScript(src) {
         return new Promise(function(resolve, reject) {
@@ -39,7 +25,6 @@
             script.src = src;
             script.onload = function() {
                 script.setAttribute('data-kin-loaded', 'true');
-                debugLog('loaded script', src);
                 resolve();
             };
             script.onerror = function() {
@@ -59,11 +44,9 @@
                         if (scope.indexOf('/repository/kinoffice_common/vendor/kin-office/') === -1) {
                             return false;
                         }
-                        debugLog('unregister service worker', scope);
                         return registration.unregister();
                     }));
                 }).catch(function(error) {
-                    debugLog('service worker purge failed', error && error.message ? error.message : String(error));
                 })
                 : Promise.resolve()),
             (window.caches && window.caches.keys
@@ -72,22 +55,18 @@
                         if (!/^document_editor_(static|dynamic)_/.test(String(key))) {
                             return false;
                         }
-                        debugLog('delete editor cache', key);
                         return window.caches.delete(key);
                     }));
                 }).catch(function(error) {
-                    debugLog('cache purge failed', error && error.message ? error.message : String(error));
                 })
                 : Promise.resolve())
         ]).then(function() {
-            debugLog('editor cache purge complete');
         });
         return cachePurgePromise;
     }
 
     function loadApi() {
         if (window.DocsAPI && window.DocsAPI.DocEditor) {
-            installFontDiagnostics();
             return Promise.resolve();
         }
         if (!apiPromise) {
@@ -97,86 +76,9 @@
                 if (!window.DocsAPI || !window.DocsAPI.DocEditor) {
                     throw new Error('Kin Office browser SDK loaded without DocsAPI.DocEditor.');
                 }
-                installFontDiagnostics();
-            });
+                });
         }
         return apiPromise;
-    }
-
-    function streamHeader(stream) {
-        var data = stream && stream.data;
-        var size = stream && stream.size;
-        if (!data || !size) return null;
-        var bytes = [];
-        var count = Math.min(8, size);
-        for (var i = 0; i < count; i += 1) {
-            bytes.push(('0' + data[i].toString(16)).slice(-2));
-        }
-        return bytes.join(' ');
-    }
-
-    function streamHeaderMagic(stream) {
-        var header = streamHeader(stream);
-        if (!header) return { header: null, valid: false, kind: 'missing' };
-        if (header.indexOf('00 01 00 00') === 0) return { header: header, valid: true, kind: 'ttf' };
-        if (header.indexOf('4f 54 54 4f') === 0) return { header: header, valid: true, kind: 'otto' };
-        if (header.indexOf('74 74 63 66') === 0) return { header: header, valid: true, kind: 'ttc' };
-        return { header: header, valid: false, kind: 'unknown' };
-    }
-
-    function describeFontInfo(name) {
-        var fonts = window.AscFonts;
-        if (!fonts || !fonts.g_map_font_index || !fonts.g_font_infos) return null;
-        var index = fonts.g_map_font_index[name];
-        var info = index !== undefined ? fonts.g_font_infos[index] : null;
-        if (!info) return null;
-        return {
-            name: info.Name,
-            indexR: info.indexR,
-            indexI: info.indexI,
-            indexB: info.indexB,
-            indexBI: info.indexBI
-        };
-    }
-
-    function installFontDiagnostics() {
-        var fonts = window.AscFonts;
-        if (!fonts || fonts._kinFontDiagnosticsInstalled) return;
-        fonts._kinFontDiagnosticsInstalled = true;
-        debugLog('font registry', {
-            files: fonts.g_font_files && fonts.g_font_files.length,
-            infos: fonts.g_font_infos && fonts.g_font_infos.length,
-            arial: describeFontInfo('Arial'),
-            dengxian: describeFontInfo('等线'),
-            calibri: describeFontInfo('Calibri')
-        });
-        if (!fonts.g_font_files) return;
-        fonts.g_font_files.forEach(function(file, index) {
-            if (!file || file._kinFontDiagnosticsWrapped || typeof file.LoadFontAsync !== 'function') return;
-            file._kinFontDiagnosticsWrapped = true;
-            var originalLoadFontAsync = file.LoadFontAsync;
-            file.LoadFontAsync = function(basePath, callback) {
-                debugLog('font load request', {
-                    index: index,
-                    id: file.Id,
-                    basePath: basePath,
-                    status: file.Status,
-                    streamIndex: file.stream_index
-                });
-                return originalLoadFontAsync.call(file, basePath, function() {
-                    var stream = fonts.g_fonts_streams && fonts.g_fonts_streams[file.stream_index];
-                    debugLog('font load complete', {
-                        index: index,
-                        id: file.Id,
-                        status: file.Status,
-                        streamIndex: file.stream_index,
-                        size: stream && stream.size,
-                        header: streamHeader(stream)
-                    });
-                    if (callback) callback();
-                });
-            };
-        });
     }
 
     function innerFontPath(inner) {
@@ -243,67 +145,9 @@
         if (loader && !loader._kinParentFontPathForced) {
             loader._kinParentFontPathForced = true;
             loader.fontFilesPath = innerFontPath(inner);
-            debugLog('parent font probe:path forced', {
-                reason: reason,
-                href: inner.location.href,
-                fontFilesPath: loader.fontFilesPath
-            });
         }
-        inner.onLogPickFont = function(message) {
-            debugLog('parent font probe:pick font', { message: String(message || '') });
-        };
         if (!fonts || !files || !infos || !app || !map) {
             return false;
-        }
-        if (!fonts._kinParentFontProbeLogged) {
-            fonts._kinParentFontProbeLogged = true;
-            debugLog('parent font probe:registry', {
-                reason: reason,
-                allFontsVersion: inner.__all_fonts_js_version__,
-                selectionBinBytes: inner.g_fonts_selection_bin ? inner.g_fonts_selection_bin.length : 0,
-                files: files && files.length,
-                infos: infos && infos.length,
-                symbolMode: {
-                    files: fonts.g_font_files ? 'source' : 'minified',
-                    infos: fonts.g_font_infos ? 'source' : 'minified',
-                    map: fonts.g_map_font_index ? 'source' : 'minified',
-                    app: fonts.g_fontApplication ? 'source' : 'minified'
-                },
-                arial: describeInnerFont(fonts, 'Arial'),
-                calibri: describeInnerFont(fonts, 'Calibri'),
-                dengxian: describeInnerFont(fonts, 'DengXian'),
-                ascw3: describeInnerFont(fonts, 'ASCW3')
-            });
-        }
-        if (!fonts._kinParentFontLoaderWrapped) {
-            fonts._kinParentFontLoaderWrapped = true;
-            (files || []).forEach(function(file, index) {
-                if (!file || file._kinParentFontDiagnosticsWrapped || typeof file.LoadFontAsync !== 'function') return;
-                file._kinParentFontDiagnosticsWrapped = true;
-                var originalLoadFontAsync = file.LoadFontAsync;
-                file.LoadFontAsync = function(basePath, callback) {
-                    debugLog('parent font probe:load request', {
-                        index: index,
-                        id: fontFileId(file),
-                        basePath: basePath,
-                        status: file.Status,
-                        streamIndex: file.stream_index
-                    });
-                    return originalLoadFontAsync.call(file, basePath, function() {
-                        var streams = fonts.g_fonts_streams || inner.AscCommon && inner.AscCommon.ZI && inner.AscCommon.ZI.eNa;
-                        var stream = streams && streams[file.stream_index];
-                        debugLog('parent font probe:load complete', {
-                            index: index,
-                            id: fontFileId(file),
-                            status: file.Status,
-                            streamIndex: file.stream_index,
-                            size: stream && stream.size,
-                            header: streamHeader(stream)
-                        });
-                        if (callback) callback();
-                    });
-                };
-            });
         }
         installInnerPackagedFontPicker(inner, fonts);
         installInnerFontDropdownLabels(inner, fileType);
@@ -345,7 +189,6 @@
                 });
             }
             ensureLabels();
-            debugLog('parent font dropdown labels installed');
         } catch (_error) {}
     }
 
@@ -380,21 +223,10 @@
         }
         function pick(name, style) {
             var resolved = resolve(name);
-            debugLog('parent font probe:pick packaged font', {
-                requested: String(name || ''),
-                resolved: resolved,
-                style: style || 0
-            });
             return { m_wsFontName: resolved, m_lStyle: style || 0 };
         }
         function pickMinified(name, style) {
             var resolved = resolve(name);
-            debugLog('parent font probe:pick packaged font', {
-                requested: String(name || ''),
-                resolved: resolved,
-                style: style || 0,
-                symbolMode: 'minified'
-            });
             return { uda: resolved, m_wsFontName: resolved, dL: String(name || '') };
         }
 
@@ -438,41 +270,14 @@
                 return infos[map[selected.uda]];
             };
         }
-
-        debugLog('parent font probe:packaged picker installed', {
-            arial: has('Arial'),
-            cjk: has('Noto Sans CJK SC'),
-            selectionBinBytes: inner.g_fonts_selection_bin ? inner.g_fonts_selection_bin.length : 0
-        });
     }
 
     function watchInnerFontProbe(reason, attemptsLeft, fileType) {
         try {
             if (installInnerFontProbe(reason, fileType)) return;
-            if ((attemptsLeft || 0) === 300 || (attemptsLeft || 0) % 50 === 0) {
-                var inner = getInnerWindow();
-                debugLog('parent font probe:waiting', {
-                    reason: reason,
-                    attemptsLeft: attemptsLeft || 0,
-                    href: inner.location && inner.location.href,
-                    hasAscFonts: !!inner.AscFonts,
-                    hasFontFiles: !!fontFiles(inner.AscFonts),
-                    hasFontInfos: !!fontInfos(inner.AscFonts),
-                    hasFontMap: !!fontNameMap(inner.AscFonts),
-                    hasFontApplication: !!fontApplication(inner.AscFonts)
-                });
-            }
         } catch (error) {
-            if ((attemptsLeft || 0) === 300 || (attemptsLeft || 0) % 50 === 0) {
-                debugLog('parent font probe:waiting', {
-                    reason: reason,
-                    attemptsLeft: attemptsLeft || 0,
-                    error: error && error.message ? error.message : String(error)
-                });
-            }
         }
         if ((attemptsLeft || 0) <= 0) {
-            debugLog('parent font probe:exhausted', { reason: reason });
             return;
         }
         setTimeout(function() {
@@ -495,6 +300,17 @@
         return typeof value === 'string' && /^(DOCY|XLSY|PPTY);/.test(value);
     }
 
+    function isInternalBinBytes(value) {
+        var bytes = value instanceof Uint8Array ? value : (ArrayBuffer.isView(value) ? new Uint8Array(value.buffer, value.byteOffset || 0, value.byteLength) : null);
+        if (!bytes || bytes.length < 5) return false;
+        var prefix = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
+        return prefix === 'DOCY;' || prefix === 'XLSY;' || prefix === 'PPTY;';
+    }
+
+    function isInternalBinPayload(value) {
+        return isInternalBinString(value) || isInternalBinBytes(value);
+    }
+
     function internalBinPrefixFor(fileType) {
         if (fileType === 'xlsx') return 'XLSY';
         if (fileType === 'pptx') return 'PPTY';
@@ -505,6 +321,18 @@
         if (fileType === 'xlsx') return '2';
         if (fileType === 'pptx') return '10';
         return '5';
+    }
+
+    function x2tInputFormatFor(fileType) {
+        if (fileType === 'xlsx') return 0x0101;
+        if (fileType === 'pptx') return 0x0081;
+        return 0x0041;
+    }
+
+    function x2tCanvasFormatFor(fileType) {
+        if (fileType === 'xlsx') return 0x2002;
+        if (fileType === 'pptx') return 0x2003;
+        return 0x2001;
     }
 
     function parseInternalBinHeader(value) {
@@ -519,6 +347,19 @@
             binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
         }
         return btoa(binary);
+    }
+
+    // Emscripten FS.readFile(..., { encoding: 'binary' }) returns a JS string whose
+    // char codes are raw bytes 0-255. TextEncoder would UTF-8-encode those and corrupt ZIP/bin data.
+    function latin1StringToUint8Array(value) {
+        if (typeof value !== 'string' || !value.length) return null;
+        var out = new Uint8Array(value.length);
+        for (var i = 0; i < value.length; i += 1) {
+            var code = value.charCodeAt(i);
+            if (code > 255) return null;
+            out[i] = code;
+        }
+        return out;
     }
 
     function normalizeBytes(value) {
@@ -536,8 +377,10 @@
                     if (decoded.length) return decoded;
                 }
             } catch (_error) {
-                // Not base64; fall through to the internal text representation.
+                // Not base64; fall through to Latin-1 binary or UTF-8 text.
             }
+            var latin1 = latin1StringToUint8Array(value);
+            if (latin1) return latin1;
             return new TextEncoder().encode(value);
         }
         if (value && value.buffer instanceof ArrayBuffer) return new Uint8Array(value.buffer);
@@ -553,6 +396,10 @@
             return value.buffer.slice(value.byteOffset || 0, (value.byteOffset || 0) + value.byteLength);
         }
         if (typeof value === 'string') {
+            var latin1 = latin1StringToUint8Array(value);
+            if (latin1) {
+                return latin1.buffer.slice(latin1.byteOffset, latin1.byteOffset + latin1.byteLength);
+            }
             return new TextEncoder().encode(value).buffer;
         }
         var bytes = normalizeBytes(value);
@@ -624,12 +471,14 @@
             '<TaskQueueDataConvert xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">',
             '  <m_sFileFrom>' + escapeXml(fromPath) + '</m_sFileFrom>',
             '  <m_sFileTo>' + escapeXml(toPath) + '</m_sFileTo>',
+            opts.formatFrom !== undefined ? '  <m_nFormatFrom>' + escapeXml(opts.formatFrom) + '</m_nFormatFrom>' : '',
+            opts.formatTo !== undefined ? '  <m_nFormatTo>' + escapeXml(opts.formatTo) + '</m_nFormatTo>' : '',
             '  <m_bIsNoBase64>true</m_bIsNoBase64>',
             '  <m_sThemeDir>' + escapeXml(themeDir) + '</m_sThemeDir>',
             '  <m_sFontDir>' + escapeXml(fontDir) + '</m_sFontDir>',
             '  <m_bEmbeddedFonts>false</m_bEmbeddedFonts>',
-            '</TaskQueueDataConvert>'
-        ];
+        '</TaskQueueDataConvert>'
+        ].filter(function(line) { return line !== ''; });
         return lines.join('\n');
     }
 
@@ -665,7 +514,6 @@
 
     function convertDocumentToBin(bytes, fileName, fileType) {
         var inputExt = String(fileType || 'docx').replace(/^\./, '').toLowerCase();
-        debugLog('convertDocumentToBin:start', fileName, fileType, bytes && bytes.length);
         return ensureX2T().then(function(module) {
             ensureWorkingDirs(module);
             var inputBytes = normalizeBytes(bytes);
@@ -674,14 +522,24 @@
             var stem = cleanName.replace(/\.[^/.]+$/, '') || 'Document';
             var unique = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
             var inputPath = '/working/' + stem + '-' + unique + '.' + inputExt;
-            var outputPath = inputPath + '.bin';
+            var outputPath = '/working/' + stem + '-' + unique + '.bin';
             var paramsPath = '/working/open-params-' + unique + '.xml';
             module.FS.writeFile(inputPath, inputBytes);
-            module.FS.writeFile(paramsPath, createConversionParams(inputPath, outputPath));
+            module.FS.writeFile(paramsPath, createConversionParams(inputPath, outputPath, {
+                formatFrom: x2tInputFormatFor(inputExt),
+                formatTo: x2tCanvasFormatFor(inputExt)
+            }));
             var code = module.ccall('main1', 'number', ['string'], [paramsPath]);
             if (code !== 0) throw new Error('Kin Office x2t open conversion failed with code: ' + code);
-            var bin = module.FS.readFile(outputPath, { encoding: 'binary' });
-            debugLog('convertDocumentToBin:done', fileName, fileType, typeof bin === 'string' ? bin.length : (bin && bin.length));
+            var rawBin = module.FS.readFile(outputPath, { encoding: 'binary' });
+            var rawBytes = latin1StringToUint8Array(rawBin) || normalizeBytes(rawBin);
+            if (!rawBytes || !rawBytes.length) {
+                throw new Error('Kin Office x2t open conversion produced empty output.');
+            }
+            if (isZipBytes(rawBytes)) {
+                throw new Error('Kin Office x2t open conversion returned document bytes instead of editor bin.');
+            }
+            var bin = wrapInternalBinPayload(rawBin, inputExt, bytesForNewDocument(inputExt));
             return {
                 bin: bin,
                 media: readMediaFiles(module)
@@ -696,7 +554,10 @@
                 if (file === '.' || file === '..') return;
                 try {
                     var fileData = module.FS.readFile('/working/media/' + file, { encoding: 'binary' });
-                    media['media/' + file] = window.URL.createObjectURL(new Blob([fileData]));
+                    var mediaBytes = latin1StringToUint8Array(fileData) || normalizeBytes(fileData);
+                    if (mediaBytes && mediaBytes.length) {
+                        media['media/' + file] = window.URL.createObjectURL(new Blob([mediaBytes]));
+                    }
                 } catch (_error) {}
             });
         } catch (_error) {}
@@ -704,7 +565,7 @@
     }
 
     function wrapInternalBinPayload(rawPayload, fileType, templatePayload) {
-        if (isInternalBinString(rawPayload)) return rawPayload;
+        if (isInternalBinPayload(rawPayload)) return rawPayload;
         var bytes = normalizeBytes(rawPayload);
         if (!bytes || !bytes.length) {
             throw new Error('Kin Office serializer returned empty editor data.');
@@ -718,7 +579,7 @@
     }
 
     function wrapNativeFileParts(data, header, fileType) {
-        if (isInternalBinString(data)) return data;
+        if (isInternalBinPayload(data)) return data;
         var bytes = normalizeBytes(data);
         if (!bytes || !bytes.length) {
             throw new Error('Kin Office native serializer returned empty editor data.');
@@ -861,7 +722,6 @@
             data: data
         };
         frame.contentWindow.postMessage(JSON.stringify(payload), window.location.origin);
-        debugLog('inner command', command);
     }
 
     function createLocalDocumentInfo(fileName, fileType) {
@@ -907,13 +767,6 @@
         var fileName = String(opts.fileName || 'Document.docx');
         var fileType = String(opts.fileType || fileName.split('.').pop() || 'docx').replace(/^\./, '').toLowerCase();
         var containerId = String(opts.containerId || 'editor');
-        debugLog('createInstance:start', {
-            fileName: fileName,
-            fileType: fileType,
-            isNew: !!opts.isNew,
-            bytes: opts.bytes && opts.bytes.length,
-            lang: opts.lang || 'en-US'
-        });
         var sourcePromise = opts.isNew
             ? Promise.resolve({ bin: bytesForNewDocument(fileType), media: {} })
             : convertDocumentToBin(opts.bytes, fileName, fileType);
@@ -921,6 +774,7 @@
         var sourcePayload = null;
         var sourceMedia = {};
         var readySent = false;
+        var binaryOpenSent = false;
 
         if (!opts.isNew && !opts.bytes) {
             throw new Error('No document bytes were provided.');
@@ -929,7 +783,6 @@
         function markReady() {
             if (readySent) return;
             readySent = true;
-            debugLog('ready', fileName, fileType);
             installDirectSaveHookSoon(fileType, opts.onSaveRequested, opts.onError, 20);
             if (opts.onReady) opts.onReady();
         }
@@ -938,13 +791,11 @@
             try {
                 var main = getMainController(fileType);
                 if (main && main._isDocReady) {
-                    debugLog('inner _isDocReady observed');
                     markReady();
                     return;
                 }
             } catch (_error) {}
             if ((attemptsLeft || 0) <= 0 || readySent) {
-                if (!readySent) debugLog('inner ready watch exhausted');
                 return;
             }
             setTimeout(function() {
@@ -952,10 +803,59 @@
             }, 100);
         }
 
+        function openEditorBinPayload(main, payload) {
+            if (!editor || typeof editor.openDocument !== 'function') {
+                throw new Error('Kin Office binary open API is not available.');
+            }
+            if (!main || !main.api) {
+                throw new Error('Kin Office editor API is not ready.');
+            }
+            if (payload === undefined || payload === null || payload === '') {
+                throw new Error('Kin Office has no editor payload to open.');
+            }
+            var api = main.api;
+            if (typeof api.asc_setLocalRestrictions === 'function') {
+                api.asc_setLocalRestrictions(0);
+            }
+            // Kin skips asc_LoadDocument when opening from local bytes (no document URL).
+            // That path normally sets ServerIdWaitComplete via co-auth; without it the
+            // SDK never reaches asc_onDocumentContentReady and the UI hangs loading.
+            api.ServerIdWaitComplete = true;
+            editor.openDocument({
+                buffer: payloadToArrayBuffer(payload)
+            });
+        }
+
+        function openBinaryAfterPermissions(attemptsLeft) {
+            if (binaryOpenSent) return;
+            try {
+                var main = getMainController(fileType);
+                if (main && main._isPermissionsInited) {
+                    binaryOpenSent = true;
+                    watchInnerFontProbe('before openDocument', 300, fileType);
+                    openEditorBinPayload(main, sourcePayload);
+                    watchInnerFontProbe('after openDocument', 300, fileType);
+                    watchInnerDocumentReady(300);
+                    return;
+                }
+            } catch (error) {
+                if ((attemptsLeft || 0) <= 0) {
+                    if (opts.onError) opts.onError(error);
+                    return;
+                }
+            }
+            if ((attemptsLeft || 0) <= 0) {
+                if (opts.onError) opts.onError(new Error('Kin Office editor permissions did not initialize.'));
+                return;
+            }
+            setTimeout(function() {
+                openBinaryAfterPermissions(attemptsLeft - 1);
+            }, 100);
+        }
+
         return sourcePromise.then(function(source) {
             sourcePayload = source.bin;
             sourceMedia = source.media || {};
-            debugLog('source ready', fileName, fileType, typeof sourcePayload === 'string' ? sourcePayload.slice(0, 4) : typeof sourcePayload);
             return loadApi();
         }).then(function() {
             var container = document.getElementById(containerId);
@@ -1014,29 +914,11 @@
                     },
                     onAppReady: function() {
                         try {
-                            debugLog('onAppReady', fileName, fileType);
                             watchInnerFontProbe('onAppReady', 300, fileType);
-                            if (!editor || typeof editor.openDocument !== 'function') {
-                                throw new Error('Kin Office binary open API is not available.');
-                            }
-                            debugLog('send local metadata without SDK offline mode');
                             postInnerEditorCommand('openDocument', {
                                 doc: createLocalDocumentInfo(fileName, fileType)
                             });
-                            setTimeout(function() {
-                                try {
-                                    watchInnerFontProbe('before openDocument', 300, fileType);
-                                    debugLog('open binary', fileName, fileType);
-                                    editor.openDocument({
-                                        buffer: payloadToArrayBuffer(sourcePayload)
-                                    });
-                                    watchInnerFontProbe('after openDocument', 300, fileType);
-                                    watchInnerDocumentReady(300);
-                                } catch (error) {
-                                    debugLog('open binary failed', error && error.message ? error.message : String(error));
-                                    if (opts.onError) opts.onError(error);
-                                }
-                            }, 0);
+                            openBinaryAfterPermissions(300);
                             if (sourceMedia && Object.keys(sourceMedia).length) {
                                 postInnerEditorCommand('asc_setImageUrls', { urls: sourceMedia });
                             }
@@ -1045,11 +927,16 @@
                         }
                     },
                     onDocumentReady: function() {
-                        debugLog('onDocumentReady event');
                         markReady();
                     },
                     onDocumentStateChange: function(event) {
                         if (opts.onDirty) opts.onDirty(!!(event && event.data));
+                    },
+                    onSaveDocument: function(event) {
+                        extractEventBytes(event);
+                        if (opts.onSaveRequested) {
+                            opts.onSaveRequested();
+                        }
                     },
                     onSave: function(event) {
                         extractEventBytes(event);
@@ -1062,7 +949,6 @@
                     },
                     onError: function(event) {
                         var message = describeEditorError(event);
-                        debugLog('onError', message);
                         if (opts.onError) opts.onError(new Error(message));
                     }
                 },
