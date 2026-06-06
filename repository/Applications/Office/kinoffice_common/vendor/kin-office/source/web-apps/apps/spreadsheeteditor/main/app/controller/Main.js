@@ -1420,7 +1420,7 @@ define([
 
                     if ( this.onServerVersion(params.asc_getBuildVersion()) || !this.onLanguageLoaded() ) return;
                     if ( this._isDocReady || this._isPermissionsInited ) {
-                        this.api.asc_LoadDocument();
+                        if (!this.appOptions.canSaveDocumentToBinary || (this.document && this.document.url)) { this.api.asc_LoadDocument(); }
                         return;
                     }
 
@@ -1548,7 +1548,7 @@ define([
                 this.api.asc_setViewMode(!this.appOptions.isEdit && !this.appOptions.isRestrictedEdit);
                 this.api.asc_setCanSendChanges(this.appOptions.canSaveToFile);
                 (this.appOptions.isRestrictedEdit && this.appOptions.canComments) && this.api.asc_setRestriction(Asc.c_oAscRestrictionType.OnlyComments);
-                this.api.asc_LoadDocument();
+                if (!this.appOptions.canSaveDocumentToBinary || (this.document && this.document.url)) { this.api.asc_LoadDocument(); }
             },
 
             loadCoAuthSettings: function() {

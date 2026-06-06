@@ -73,6 +73,36 @@ install_kinoffice_common() {
     rm -rf "${dest}/vendor/kin-office/source"
     echo "deploy.sh: removed stale vendor/kin-office/source from Kin build"
   fi
+  write_kinoffice_release_stamp "${dest}"
+}
+
+write_kinoffice_release_stamp() {
+  local common_dir="$1"
+  local release
+  release="$(date -u +%Y%m%d%H%M%S)"
+  printf '{"release":"%s"}\n' "${release}" > "${common_dir}/release.json"
+  echo "deploy.sh: stamped ${common_dir}/release.json (${release})"
+}
+
+remove_stale_kinoffice_debug_entries() {
+  local app_dir="$1"
+  local removed=0
+  local stale
+  shopt -s nullglob
+  for stale in "${app_dir}"/app_debug_*.js; do
+    rm -f "${stale}"
+    removed=$((removed + 1))
+    echo "deploy.sh: removed stale debug entry ${stale}"
+  done
+  if [[ -f "${app_dir}/app.mjs" ]]; then
+    rm -f "${app_dir}/app.mjs"
+    removed=$((removed + 1))
+    echo "deploy.sh: removed app.mjs (entry is boot.js) from ${app_dir}"
+  fi
+  shopt -u nullglob
+  if [[ "${removed}" -gt 0 ]]; then
+    echo "deploy.sh: removed ${removed} stale kinoffice app entry file(s) from ${app_dir}"
+  fi
 }
 
 install_apps() {
@@ -99,6 +129,7 @@ install_apps() {
       echo "deploy.sh: copied ${office_dest}/${app} (runtime only; Euro-Office source/ excluded)"
     else
       rsync -a "${office_src}/${app}/" "${office_dest}/${app}/"
+      remove_stale_kinoffice_debug_entries "${office_dest}/${app}"
       echo "deploy.sh: copied ${office_dest}/${app}"
     fi
   done
@@ -158,3 +189,4 @@ export KIN_BUILD_PATH
 install_apps "${KIN_BUILD_PATH}/repository"
 install_kinoffice_cmd "${KIN_BUILD_PATH}/commands"
 echo "deploy.sh: Kin Office copied from ${ROOT} (Kin nginx not reloaded)"
+echo "deploy.sh: verify read path — curl -skL 'https://127.0.0.1:9219/repository/kinoffice_common/office_app.js' | rg '/api/file/raw'"

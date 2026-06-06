@@ -100,6 +100,14 @@ async function kinOfficeCommand(args) {
 }
 
 export function bootstrapKinOfficeApp(config) {
+    try {
+        const pageUrl = new URL(window.location.href);
+        if (pageUrl.searchParams.has('kinOfficeBuild')) {
+            pageUrl.searchParams.delete('kinOfficeBuild');
+            window.history.replaceState(null, '', pageUrl.pathname + pageUrl.search + pageUrl.hash);
+        }
+    } catch (_error) {}
+
     const appConfig = Object.assign({
         appTag: 'kinoffice',
         menuPrefix: 'kinoffice.app',
@@ -110,8 +118,7 @@ export function bootstrapKinOfficeApp(config) {
 
     const iframeEl = ensureKinOfficeIframeShell();
     const ORIGIN = window.location.origin;
-    const KIN_OFFICE_BUILD_ID = '20260606-cache25';
-    const LOCAL_EDITOR_URL = new URL('./browser_editor.html?kinOfficeBuild=' + KIN_OFFICE_BUILD_ID, import.meta.url).href;
+    const LOCAL_EDITOR_URL = new URL('./browser_editor.html', import.meta.url).href;
     const params = new URLSearchParams(window.location.search);
     const kinOpenPath = params.get('kin_open_path') || params.get('path') || '';
     const instanceId = getInstanceId();
@@ -132,16 +139,6 @@ export function bootstrapKinOfficeApp(config) {
     let currentDirty = false;
     let currentSession = null;
     const pendingExports = new Map();
-
-    function log() {
-        console.log.apply(console, ['[' + appConfig.appTag + ']'].concat(Array.prototype.slice.call(arguments)));
-    }
-
-    log('bootstrap', KIN_OFFICE_BUILD_ID, window.location.href, {
-        kinOpenPath,
-        debugDefaultDocumentUrl: appConfig.debugDefaultDocumentUrl || '',
-        debugForceDefaultDocument: !!appConfig.debugForceDefaultDocument
-    });
 
     function postToParent(message) {
         try {
@@ -238,29 +235,35 @@ export function bootstrapKinOfficeApp(config) {
         });
     }
 
-    async function readKinFileBytes(kinPath) {
-        log('readKinFileBytes:start', kinPath);
-        const parsed = parseKinPath(kinPath);
-        if (!parsed) throw new Error('Open from this volume is not supported yet: ' + kinPath);
-        const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
-        const route = '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/');
-        const response = await fetch(route + '?_kin_ts=' + Date.now(), {
-            method: 'GET',
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
-        });
-        if (!response.ok) throw new Error('Could not read Kin file (HTTP ' + response.status + ')');
-        const bytes = new Uint8Array(await response.arrayBuffer());
-        log('readKinFileBytes:done', kinPath, bytes.length);
-        return bytes;
+    function kinApiErrorFromRawBytes(bytes) {
+        if (!bytes || bytes.length === 0 || bytes.length > 4096) return null;
+        const text = new TextDecoder().decode(bytes).trimStart();
+        if (!text.startsWith('{')) return null;
+        try {
+            const json = JSON.parse(text);
+            if (json && json.response === 'fail') {
+                return json.message ? String(json.message) : 'Read failed';
+            }
+        } catch (_error) {}
+        return null;
     }
 
-    function kinFileUrlForPath(kinPath) {
-        const parsed = parseKinPath(kinPath);
-        if (!parsed) throw new Error('Open from this volume is not supported yet: ' + kinPath);
-        const segs = String(parsed.relative || '').split('/').filter(Boolean).map(encodeURIComponent);
-        return '/file/' + encodeURIComponent(parsed.volume) + '/' + segs.join('/') + '?_kin_ts=' + Date.now();
+    async function readKinFileBytes(kinPath) {
+        const path = String(kinPath || '').trim();
+        if (!parseKinPath(path)) throw new Error('Open from this volume is not supported yet: ' + path);
+        const response = await fetch('/api/file/raw', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream' },
+            body: JSON.stringify({ path })
+        });
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const apiError = kinApiErrorFromRawBytes(bytes);
+        if (apiError) throw new Error(apiError);
+        if (!response.ok) {
+            throw new Error('Could not read Kin file (HTTP ' + response.status + ')');
+        }
+        return bytes;
     }
 
     async function uploadKinFileBytes(kinPath, bytes) {
@@ -345,32 +348,24 @@ export function bootstrapKinOfficeApp(config) {
     }
 
     async function loadBlankTemplateBytes(fileType) {
-        log('loadBlankTemplateBytes:start', fileType || appConfig.fileType);
         const json = await kinOfficeCommand({ action: 'template', type: fileType || appConfig.fileType });
         const bytes = base64ToBytes(json.data_base64 || '');
-        log('loadBlankTemplateBytes:done', fileType || appConfig.fileType, bytes.length);
         return bytes;
     }
 
     async function loadDebugDefaultDocumentBytes() {
         if (!appConfig.debugDefaultDocumentUrl) return null;
         const url = new URL(appConfig.debugDefaultDocumentUrl, import.meta.url).href;
-        log('loadDebugDefaultDocumentBytes:start', url, {
-            configured: appConfig.debugDefaultDocumentUrl,
-            importMetaUrl: import.meta.url
-        });
         const response = await fetch(url, {
             method: 'GET',
             credentials: 'same-origin',
             cache: 'no-store'
         });
-        log('loadDebugDefaultDocumentBytes:response', response.status, response.url);
         if (!response.ok) {
             throw new Error('Could not load Kin Office debug document: HTTP ' + response.status);
         }
         const bytes = new Uint8Array(await response.arrayBuffer());
         validateOfficeBytes(bytes);
-        log('loadDebugDefaultDocumentBytes:done', bytes.length);
         return bytes;
     }
 
@@ -396,13 +391,6 @@ export function bootstrapKinOfficeApp(config) {
 
     async function openLocalDocument(options) {
         const session = createDocumentSession(options || {});
-        log('openLocalDocument:start', {
-            fileName: session.fileName,
-            fileType: session.fileType,
-            isNew: session.isNew,
-            bytes: session.bytes ? session.bytes.length : 0,
-            kinPath: session.kinPath || ''
-        });
         await ensureEditorShell();
         currentSession = session;
         currentFilename = session.fileName;
@@ -429,20 +417,11 @@ export function bootstrapKinOfficeApp(config) {
             data_base64: session.bytes ? bytesToBase64(session.bytes) : '',
             lang: 'en-US'
         });
-        log('openLocalDocument:posted', {
-            requestId: reqId,
-            fileName: currentFilename,
-            fileType: currentFileType,
-            isNew: session.isNew,
-            base64Length: session.bytes ? bytesToBase64(session.bytes).length : 0
-        });
         try {
             await opened;
             editorOpen = true;
-            log('openLocalDocument:ready', session.fileName, session.fileType);
         } catch (error) {
             if (currentSession === session) currentSession = null;
-            log('openLocalDocument:failed', error && error.message ? error.message : String(error));
             throw error;
         }
     }
@@ -533,10 +512,6 @@ export function bootstrapKinOfficeApp(config) {
 
     async function openInitialDocument() {
         if (appConfig.debugForceDefaultDocument) {
-            log('openInitialDocument:forcing debug default', {
-                debugDefaultDocumentUrl: appConfig.debugDefaultDocumentUrl || '',
-                ignoredKinOpenPath: kinOpenPath || ''
-            });
             await openBlankDocument();
             return;
         }
@@ -562,7 +537,6 @@ export function bootstrapKinOfficeApp(config) {
             }
         } catch (error) {
             if (error && error.message === 'cancel') return;
-            log('operation failed:', error && error.message ? error.message : error);
             await openAlert(error && error.message ? error.message : String(error), 'Kin Office');
         }
     }
@@ -570,7 +544,6 @@ export function bootstrapKinOfficeApp(config) {
     async function handleEditorEvent(data) {
         if (!data) return;
         if (data.event === 'ready') {
-            log('editor event:ready');
             if (pendingOpen) {
                 const pending = pendingOpen;
                 pendingOpen = null;
@@ -579,7 +552,6 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'documentStateChange') {
-            log('editor event:dirty', !!data.changed);
             currentDirty = !!data.changed;
             return;
         }
@@ -597,7 +569,6 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'exported') {
-            log('editor event:exported', data.requestId || '', data.fileName || '', data.fileType || '', String(data.data_base64 || '').length);
             const pending = pendingExports.get(data.requestId || '');
             if (!pending) return;
             pendingExports.delete(data.requestId || '');
@@ -609,7 +580,6 @@ export function bootstrapKinOfficeApp(config) {
             return;
         }
         if (data.event === 'exportFailed') {
-            log('editor event:exportFailed', data.requestId || '', data.error || '');
             const pending = pendingExports.get(data.requestId || '');
             if (!pending) return;
             pendingExports.delete(data.requestId || '');
@@ -618,7 +588,6 @@ export function bootstrapKinOfficeApp(config) {
         }
         if (data.event === 'error') {
             const message = data.error || 'unknown error';
-            log('Local editor error:', message);
             if (pendingOpen) {
                 const pending = pendingOpen;
                 pendingOpen = null;

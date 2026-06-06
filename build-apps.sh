@@ -71,8 +71,16 @@ install_to_kin() {
             return 1
         fi
         rsync -av "$OFFICE_SRC/$app/" "$OFFICE_DEST/$app/"
+        for stale in "$OFFICE_DEST/$app"/app_debug_*.js; do
+            [ -e "$stale" ] || continue
+            rm -f "$stale"
+            echo "Removed stale debug entry $stale"
+        done
         echo "Installed $OFFICE_DEST/$app"
     done
+    RELEASE=$(date -u +%Y%m%d%H%M%S)
+    printf '{"release":"%s"}\n' "$RELEASE" > "$OFFICE_DEST/kinoffice_common/release.json"
+    echo "Stamped $OFFICE_DEST/kinoffice_common/release.json ($RELEASE)"
     echo "Apps installed to Kin build (kinoffice_* only; other Office apps untouched)."
 }
 

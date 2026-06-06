@@ -66,7 +66,7 @@ Kin workspace
         |
         +-- office_app.js
               |
-              +-- GET /file/{volume}/...                 open existing file
+              +-- POST /api/file/raw                        open existing file (Kin path)
               +-- POST /api/commands/kinoffice           blank templates
               +-- POST /api/file/write_binary            small saves
               +-- POST /api/file/upload_*                large saves
@@ -86,7 +86,7 @@ All URL construction must use Kin-relative paths and `window.location.origin`. D
 `office_app.js` owns file reads:
 
 1. Parse Kin paths like `Home:Documents/File.docx`.
-2. Read bytes from `GET /file/{volume}/...` with cache-busting query params.
+2. Read bytes from `POST /api/file/raw` with JSON `{ "path": "Home:Documents/File.docx" }`.
 3. Validate the result is an OOXML ZIP by checking the local-file header.
 4. Send bytes to `browser_editor.html` through `postMessage`.
 5. `browser_editor_adapter.js` converts OOXML to Euro-Office internal bin through browser `x2t.wasm`.
@@ -174,7 +174,7 @@ Slides are especially useful for font debugging because upstream default placeho
 
 | Operation | API |
 | --- | --- |
-| Open existing file | `GET /file/{volume}/...` |
+| Open existing file | `POST /api/file/raw` with `{ "path": "Volume:..." }` |
 | Blank template | `POST /api/commands/kinoffice` |
 | Save small file | `POST /api/file/write_binary` |
 | Save large file | `POST /api/file/upload_begin` |

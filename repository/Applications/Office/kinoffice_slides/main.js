@@ -23,7 +23,6 @@
             width: 1024,
             height: 768,
             quitOnClose: true,
-            module: true,
             query: q,
             assets: [
                 { type: 'css', href: '../kin_ui/theme/kin-ui.css' },

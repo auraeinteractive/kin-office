@@ -49,65 +49,12 @@
             }
 
         </style>
-    <script>
-+function kinOfficeFontDebug(){
-    var build = "20260606-cache25";
-    function send(topic, data) {
-        try {
-            var payload = {type: "kinOfficeFontDebug", build: build, topic: topic, data: data || {}};
-            console.log("[KinOfficeFont " + build + "]", topic, data || {});
-            window.parent && window.parent.postMessage(payload, "*");
-        } catch (_error) {}
-    }
-    window.addEventListener("error", function(event) {
-        send("inner error", {message: event.message, source: event.filename, line: event.lineno, column: event.colno});
-    });
-    window.addEventListener("unhandledrejection", function(event) {
-        var reason = event.reason || {};
-        send("inner rejection", {message: reason.message || String(reason)});
-    });
-    window.onLogPickFont = function(message) {
-        send("pick font", {message: String(message || "")});
-    };
-    var OriginalXHR = window.XMLHttpRequest;
-    if (OriginalXHR && OriginalXHR.prototype && !OriginalXHR.prototype._kinFontDebugWrapped) {
-        OriginalXHR.prototype._kinFontDebugWrapped = true;
-        var originalOpen = OriginalXHR.prototype.open;
-        var originalSend = OriginalXHR.prototype.send;
-        OriginalXHR.prototype.open = function(method, url) {
-            this._kinFontDebugUrl = String(url || "");
-            return originalOpen.apply(this, arguments);
-        };
-        OriginalXHR.prototype.send = function() {
-            var xhr = this;
-            var url = xhr._kinFontDebugUrl || "";
-            var watch = /(?:odttf|AllFonts|fonts_thumbnail|fonts\/)/.test(url);
-            if (watch) {
-                send("xhr start", {url: url});
-                xhr.addEventListener("load", function() {
-                    var size = 0;
-                    try {
-                        if (xhr.response && xhr.response.byteLength !== undefined) size = xhr.response.byteLength;
-                        else if (xhr.responseText) size = xhr.responseText.length;
-                    } catch (_error) {}
-                    send("xhr load", {url: url, status: xhr.status, size: size});
-                });
-                xhr.addEventListener("error", function() {
-                    send("xhr error", {url: url, status: xhr.status});
-                });
-            }
-            return originalSend.apply(this, arguments);
-        };
-    }
-    function streamHeader(stream) {
-        var data = stream && stream.data;
-        var size = stream && stream.size;
-        if (!data || !size) return null;
-        var bytes = [];
-        var count = Math.min(8, size);
-        for (var i = 0; i < count; i += 1) bytes.push(("0" + data[i].toString(16)).slice(-2));
-        return bytes.join(" ");
-    }
+    \
+\
+\
+\
+<script>
++function kinOfficeFontFix(){
     function fontPath() {
         try {
             var marker = "/web-apps/apps/";
@@ -119,9 +66,6 @@
             return "../../../../fonts/";
         }
     }
-    function fontFiles(fonts) {
-        return fonts && (fonts.g_font_files || fonts.Snc) || null;
-    }
     function fontInfos(fonts) {
         return fonts && (fonts.g_font_infos || fonts.i4a) || null;
     }
@@ -130,35 +74,6 @@
     }
     function fontApplication(fonts) {
         return fonts && (fonts.g_fontApplication || fonts.CQ) || null;
-    }
-    function fileId(file) {
-        return file && (file.Id || file.uda || file.id || file.name);
-    }
-    function describeSelectionList(app) {
-        var list = app && app.Rnc && app.Rnc.OS;
-        if (!list) return null;
-        return {
-            count: list.length,
-            first: list.slice(0, 8).map(function(item) {
-                return item && {name: item.uda || item.m_wsFontName, path: item.XWa || item.m_wsFontPath};
-            })
-        };
-    }
-    function describeFont(fonts, name) {
-        var map = fontNameMap(fonts);
-        var infos = fontInfos(fonts);
-        var index = map && map[name];
-        var info = index !== undefined && infos ? infos[index] : null;
-        if (!info) return null;
-        return {
-            name: info.Name || info.ya,
-            indexR: info.indexR !== undefined ? info.indexR : info.N3,
-            faceIndexR: info.faceIndexR !== undefined ? info.faceIndexR : info.Ldb,
-            indexI: info.indexI !== undefined ? info.indexI : info.hda,
-            faceIndexI: info.faceIndexI !== undefined ? info.faceIndexI : info.rnc,
-            indexB: info.indexB !== undefined ? info.indexB : info.rP,
-            faceIndexB: info.faceIndexB !== undefined ? info.faceIndexB : info.pnc
-        };
     }
     function installKinFontPicker(fonts) {
         var app = fontApplication(fonts);
@@ -189,12 +104,10 @@
         }
         function pick(name, style) {
             var resolved = resolve(name);
-            send("pick packaged font", {requested: String(name || ""), resolved: resolved, style: style || 0});
             return {m_wsFontName: resolved, m_lStyle: style || 0};
         }
         function pickMinified(name, style) {
             var resolved = resolve(name);
-            send("pick packaged font", {requested: String(name || ""), resolved: resolved, style: style || 0, symbolMode: "minified"});
             return {uda: resolved, m_wsFontName: resolved, dL: String(name || "")};
         }
         if (fonts.g_fontApplication) {
@@ -237,17 +150,9 @@
                 return infos[map[selected.uda]];
             };
         }
-        send("packaged font picker installed", {
-            arial: has("Arial"),
-            cjk: has("Noto Sans CJK SC"),
-            selectionBinBytes: window.g_fonts_selection_bin ? window.g_fonts_selection_bin.length : 0,
-            symbolMode: fonts.g_fontApplication ? "source" : "minified",
-            selectionList: describeSelectionList(app)
-        });
     }
     function install() {
         var fonts = window.AscFonts;
-        var files = fontFiles(fonts);
         var infos = fontInfos(fonts);
         var app = fontApplication(fonts);
         var map = fontNameMap(fonts);
@@ -255,42 +160,9 @@
         if (loader && !loader._kinFontPathForced) {
             loader._kinFontPathForced = true;
             loader.fontFilesPath = fontPath();
-            send("font path forced", {fontFilesPath: loader.fontFilesPath, href: window.location.href});
         }
         if (!fonts || !infos || !map || !app) return false;
         installKinFontPicker(fonts);
-        if (fonts._kinInnerFontDiagnosticsInstalled) return true;
-        fonts._kinInnerFontDiagnosticsInstalled = true;
-        send("font registry", {
-            allFontsVersion: window.__all_fonts_js_version__,
-            selectionBinBytes: window.g_fonts_selection_bin ? window.g_fonts_selection_bin.length : 0,
-            files: files && files.length,
-            infos: infos && infos.length,
-            symbolMode: {
-                files: fonts.g_font_files ? "source" : "minified",
-                infos: fonts.g_font_infos ? "source" : "minified",
-                map: fonts.g_map_font_index ? "source" : "minified",
-                app: fonts.g_fontApplication ? "source" : "minified"
-            },
-            selectionList: describeSelectionList(app),
-            arial: describeFont(fonts, "Arial"),
-            calibri: describeFont(fonts, "Calibri"),
-            dengxian: describeFont(fonts, "DengXian"),
-            dengxianLight: describeFont(fonts, "DengXian Light")
-        });
-        (files || []).forEach(function(file, index) {
-            if (!file || file._kinFontDiagnosticsWrapped || typeof file.LoadFontAsync !== "function") return;
-            file._kinFontDiagnosticsWrapped = true;
-            var originalLoadFontAsync = file.LoadFontAsync;
-            file.LoadFontAsync = function(basePath, callback) {
-                send("font load request", {index: index, id: fileId(file), basePath: basePath, status: file.Status, streamIndex: file.stream_index});
-                return originalLoadFontAsync.call(file, basePath, function() {
-                    var stream = fonts.g_fonts_streams && fonts.g_fonts_streams[file.stream_index];
-                    send("font load complete", {index: index, id: fileId(file), status: file.Status, streamIndex: file.stream_index, size: stream && stream.size, header: streamHeader(stream)});
-                    if (callback) callback();
-                });
-            };
-        });
         return true;
     }
     function ensureFontDropdownLabels() {
@@ -334,7 +206,6 @@
                 });
             }
             ensureFontDropdownLabels();
-            send("font dropdown labels installed", {});
         } catch (_error) {}
     }
     var attempts = 0;
@@ -348,7 +219,6 @@
             install();
             installFontDropdownLabels();
             ensureFontDropdownLabels();
-            send("font debug ready", {attempts: attempts});
         }
     }, 100);
 }();

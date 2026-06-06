@@ -10,8 +10,8 @@
 </head>
 <body>
     <div id="editor"></div>
-    <script src="vendor/kin-office/empty_bin.js?kinOfficeBuild=20260606-cache25"></script>
-    <script src="browser_editor_adapter.js?kinOfficeBuild=20260606-cache25"></script>
+    <script src="vendor/kin-office/empty_bin.js"></script>
+    <script src="browser_editor_adapter.js"></script>
     <script>
     (function() {
         'use strict';
@@ -19,18 +19,8 @@
         var editorEl = document.getElementById('editor');
         var editor = null;
 
-        function debugLog() {
-            try {
-                console.log.apply(console, ['[KinOfficeEditorShell]'].concat(Array.prototype.slice.call(arguments)));
-            } catch (_error) {}
-        }
-
         function setEditorLoading(loading) {
             if (editorEl) editorEl.classList.toggle('loading', !!loading);
-        }
-
-        function setStatus(text) {
-            debugLog(text);
         }
 
         function post(message) {
@@ -58,14 +48,6 @@
 
         async function openDocument(data) {
             if (!window.KinOfficeBrowser) throw new Error('Kin Office editor bridge did not load.');
-            setStatus('open:start ' + (data.fileType || 'docx'));
-            debugLog('open:start', {
-                fileName: data.fileName || 'Document.docx',
-                fileType: data.fileType || 'docx',
-                isNew: !!data.isNew,
-                base64Length: String(data.data_base64 || '').length,
-                lang: data.lang || 'en'
-            });
             setEditorLoading(true);
             if (editor && typeof editor.destroy === 'function') {
                 editor.destroy();
@@ -79,34 +61,24 @@
                 isNew: !!data.isNew,
                 lang: data.lang || 'en',
                 onReady: function() {
-                    setStatus('open:ready');
-                    debugLog('open:ready');
                     setEditorLoading(false);
                     post({ event: 'ready' });
                 },
                 onDirty: function(changed) {
-                    debugLog('dirty', !!changed);
                     post({ event: 'documentStateChange', changed: !!changed });
                 },
                 onSaveRequested: function() {
-                    debugLog('save requested');
                     post({ event: 'saveRequested' });
                 },
                 onError: function(error) {
-                    setStatus('error ' + (error && error.message ? error.message : String(error)));
-                    debugLog('error', error && error.message ? error.message : String(error));
                     post({ event: 'error', error: error && error.message ? error.message : String(error) });
                 }
             });
-            debugLog('open:create returned');
-            setStatus('open:create returned');
         }
 
         async function exportDocument(requestId) {
             if (!editor || typeof editor.exportDocument !== 'function') throw new Error('No document is open.');
-            debugLog('export:start', requestId || '');
             var result = await editor.exportDocument();
-            debugLog('export:done', result.fileName || '', result.fileType || '', result.bytes ? result.bytes.length : 0);
             post({
                 event: 'exported',
                 requestId: requestId || '',
@@ -121,18 +93,14 @@
             var data = event.data || {};
             if (data.type !== 'kinOfficeEditorCommand') return;
             if (data.command === 'open') {
-                debugLog('command:open', data.requestId || '');
                 openDocument(data).catch(function(error) {
                     setEditorLoading(false);
-                    debugLog('open:failed', error && error.message ? error.message : String(error));
                     post({ event: 'error', error: error && error.message ? error.message : String(error) });
                 });
                 return;
             }
             if (data.command === 'export') {
-                debugLog('command:export', data.requestId || '');
                 exportDocument(data.requestId).catch(function(error) {
-                    debugLog('export:failed', error && error.message ? error.message : String(error));
                     post({
                         event: 'exportFailed',
                         requestId: data.requestId || '',
@@ -160,7 +128,6 @@
         });
 
         post({ event: 'shellReady' });
-        setStatus('shellReady');
     }());
     </script>
 </body>

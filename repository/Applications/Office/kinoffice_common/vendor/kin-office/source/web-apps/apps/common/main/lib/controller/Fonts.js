@@ -106,7 +106,7 @@ define([
                     id          :_.isEmpty(fontId) ? Common.UI.getId() : fontId,
                     name        : font.asc_getFontName(),
 //                    displayValue: font.asc_getFontName(),
-                    imgidx      : font.asc_getFontThumbnail(),
+                    imgidx      : -1,
                     type        : font.asc_getFontType()
                 });
             });

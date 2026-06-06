@@ -1,8 +1,8 @@
 {
   "id": "kinoffice_sheets",
   "displayName": "Sheets",
-  "version": "19",
-  "entry": "main.js",
+  "version": "26",
+  "entry": "app.js",
   "category": "Office",
   "published": true
 }

@@ -1,5 +1,4 @@
 ( function() {
-    var BUILD_ID = '20260606-cache25';
     var DOCS_ENTRY = 'app.js';
 
     function qp( name ) {
@@ -9,7 +8,18 @@
             return '';
         }
     }
+
+    function dropLegacyKinOfficeBuildParam() {
+        try {
+            var url = new URL( location.href );
+            if( !url.searchParams.has( 'kinOfficeBuild' ) ) return;
+            url.searchParams.delete( 'kinOfficeBuild' );
+            history.replaceState( null, '', url.pathname + url.search + url.hash );
+        } catch ( _e ) {}
+    }
+
     function run() {
+        dropLegacyKinOfficeBuildParam();
         if( !window.kin || !kin.classes || !kin.classes.Window ) {
             console.error( 'kinoffice_docs: kin app API unavailable' );
             return;
@@ -19,12 +29,6 @@
         var openPath = qp( 'kin_open_path' ) || qp( 'path' );
         if( openPath ) q.kin_open_path = openPath;
         q.kinoffice_mode = qp( 'kinoffice_mode' ) || 'local';
-        q.kinOfficeBuild = BUILD_ID;
-        console.log( 'kinoffice_docs launcher', BUILD_ID, {
-            packageId: pkg,
-            entry: DOCS_ENTRY,
-            query: q
-        } );
         new kin.classes.Window( {
             entry: DOCS_ENTRY,
             packageId: pkg,
@@ -32,7 +36,6 @@
             width: 1024,
             height: 768,
             quitOnClose: true,
-            module: true,
             query: q,
             assets: [
                 { type: 'css', href: '../kin_ui/theme/kin-ui.css' },

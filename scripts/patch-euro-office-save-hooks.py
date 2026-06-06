@@ -8,7 +8,11 @@ import sys
 
 SAVE_HOOK = "(window.KinOfficeDirectSave && window.KinOfficeDirectSave())"
 UPSTREAM_PRODUCT_TOKEN = "ONLY" + "OFFICE"
-KIN_OFFICE_BUILD_ID = "20260606-cache25"
+SKIP_URL_LOAD_DOCUMENT = (
+    "if (!this.appOptions.canSaveDocumentToBinary || (this.document && this.document.url)) "
+    "{ this.api.asc_LoadDocument(); }"
+)
+LOAD_DOCUMENT_RE = re.compile(r"this\.api\.asc_LoadDocument\(\);?")
 
 FONT_COMBO_TEMPLATE_OLD = 'style="height:<%=scope.getListItemHeight()%>px;"></a>'
 FONT_COMBO_TEMPLATE_NEW = (
@@ -97,66 +101,9 @@ SDK_RUNTIME_SCRIPTS = """\
     <script src="../../../../sdkjs/vendor/polyfill.js"></script>
     <script src="../../../vendor/xregexp/xregexp-all-min.js"></script>"""
 REQUIREJS_SCRIPT = '<script src="../../../vendor/requirejs/require.js"></script>'
-KIN_FONT_DEBUG_SCRIPT = """\
+KIN_FONT_FIX_SCRIPT = r"""\
 <script>
-+function kinOfficeFontDebug(){
-    var build = "__KIN_OFFICE_BUILD_ID__";
-    function send(topic, data) {
-        try {
-            var payload = {type: "kinOfficeFontDebug", build: build, topic: topic, data: data || {}};
-            console.log("[KinOfficeFont " + build + "]", topic, data || {});
-            window.parent && window.parent.postMessage(payload, "*");
-        } catch (_error) {}
-    }
-    window.addEventListener("error", function(event) {
-        send("inner error", {message: event.message, source: event.filename, line: event.lineno, column: event.colno});
-    });
-    window.addEventListener("unhandledrejection", function(event) {
-        var reason = event.reason || {};
-        send("inner rejection", {message: reason.message || String(reason)});
-    });
-    window.onLogPickFont = function(message) {
-        send("pick font", {message: String(message || "")});
-    };
-    var OriginalXHR = window.XMLHttpRequest;
-    if (OriginalXHR && OriginalXHR.prototype && !OriginalXHR.prototype._kinFontDebugWrapped) {
-        OriginalXHR.prototype._kinFontDebugWrapped = true;
-        var originalOpen = OriginalXHR.prototype.open;
-        var originalSend = OriginalXHR.prototype.send;
-        OriginalXHR.prototype.open = function(method, url) {
-            this._kinFontDebugUrl = String(url || "");
-            return originalOpen.apply(this, arguments);
-        };
-        OriginalXHR.prototype.send = function() {
-            var xhr = this;
-            var url = xhr._kinFontDebugUrl || "";
-            var watch = /(?:odttf|AllFonts|fonts_thumbnail|fonts\\/)/.test(url);
-            if (watch) {
-                send("xhr start", {url: url});
-                xhr.addEventListener("load", function() {
-                    var size = 0;
-                    try {
-                        if (xhr.response && xhr.response.byteLength !== undefined) size = xhr.response.byteLength;
-                        else if (xhr.responseText) size = xhr.responseText.length;
-                    } catch (_error) {}
-                    send("xhr load", {url: url, status: xhr.status, size: size});
-                });
-                xhr.addEventListener("error", function() {
-                    send("xhr error", {url: url, status: xhr.status});
-                });
-            }
-            return originalSend.apply(this, arguments);
-        };
-    }
-    function streamHeader(stream) {
-        var data = stream && stream.data;
-        var size = stream && stream.size;
-        if (!data || !size) return null;
-        var bytes = [];
-        var count = Math.min(8, size);
-        for (var i = 0; i < count; i += 1) bytes.push(("0" + data[i].toString(16)).slice(-2));
-        return bytes.join(" ");
-    }
++function kinOfficeFontFix(){
     function fontPath() {
         try {
             var marker = "/web-apps/apps/";
@@ -168,9 +115,6 @@ KIN_FONT_DEBUG_SCRIPT = """\
             return "../../../../fonts/";
         }
     }
-    function fontFiles(fonts) {
-        return fonts && (fonts.g_font_files || fonts.Snc) || null;
-    }
     function fontInfos(fonts) {
         return fonts && (fonts.g_font_infos || fonts.i4a) || null;
     }
@@ -179,35 +123,6 @@ KIN_FONT_DEBUG_SCRIPT = """\
     }
     function fontApplication(fonts) {
         return fonts && (fonts.g_fontApplication || fonts.CQ) || null;
-    }
-    function fileId(file) {
-        return file && (file.Id || file.uda || file.id || file.name);
-    }
-    function describeSelectionList(app) {
-        var list = app && app.Rnc && app.Rnc.OS;
-        if (!list) return null;
-        return {
-            count: list.length,
-            first: list.slice(0, 8).map(function(item) {
-                return item && {name: item.uda || item.m_wsFontName, path: item.XWa || item.m_wsFontPath};
-            })
-        };
-    }
-    function describeFont(fonts, name) {
-        var map = fontNameMap(fonts);
-        var infos = fontInfos(fonts);
-        var index = map && map[name];
-        var info = index !== undefined && infos ? infos[index] : null;
-        if (!info) return null;
-        return {
-            name: info.Name || info.ya,
-            indexR: info.indexR !== undefined ? info.indexR : info.N3,
-            faceIndexR: info.faceIndexR !== undefined ? info.faceIndexR : info.Ldb,
-            indexI: info.indexI !== undefined ? info.indexI : info.hda,
-            faceIndexI: info.faceIndexI !== undefined ? info.faceIndexI : info.rnc,
-            indexB: info.indexB !== undefined ? info.indexB : info.rP,
-            faceIndexB: info.faceIndexB !== undefined ? info.faceIndexB : info.pnc
-        };
     }
     function installKinFontPicker(fonts) {
         var app = fontApplication(fonts);
@@ -227,7 +142,7 @@ KIN_FONT_DEBUG_SCRIPT = """\
             return false;
         }
         function resolve(name) {
-            var requested = String(name || "").replace(/^[\\s'"]+|[\\s'"]+$/g, "");
+            var requested = String(name || "").replace(/^[\s'"]+|[\s'"]+$/g, "");
             if (has(requested)) return requested;
             var lower = requested.toLowerCase();
             if (lower === "serif") return has("Times New Roman") ? "Times New Roman" : "Noto Serif";
@@ -238,12 +153,10 @@ KIN_FONT_DEBUG_SCRIPT = """\
         }
         function pick(name, style) {
             var resolved = resolve(name);
-            send("pick packaged font", {requested: String(name || ""), resolved: resolved, style: style || 0});
             return {m_wsFontName: resolved, m_lStyle: style || 0};
         }
         function pickMinified(name, style) {
             var resolved = resolve(name);
-            send("pick packaged font", {requested: String(name || ""), resolved: resolved, style: style || 0, symbolMode: "minified"});
             return {uda: resolved, m_wsFontName: resolved, dL: String(name || "")};
         }
         if (fonts.g_fontApplication) {
@@ -286,17 +199,9 @@ KIN_FONT_DEBUG_SCRIPT = """\
                 return infos[map[selected.uda]];
             };
         }
-        send("packaged font picker installed", {
-            arial: has("Arial"),
-            cjk: has("Noto Sans CJK SC"),
-            selectionBinBytes: window.g_fonts_selection_bin ? window.g_fonts_selection_bin.length : 0,
-            symbolMode: fonts.g_fontApplication ? "source" : "minified",
-            selectionList: describeSelectionList(app)
-        });
     }
     function install() {
         var fonts = window.AscFonts;
-        var files = fontFiles(fonts);
         var infos = fontInfos(fonts);
         var app = fontApplication(fonts);
         var map = fontNameMap(fonts);
@@ -304,47 +209,14 @@ KIN_FONT_DEBUG_SCRIPT = """\
         if (loader && !loader._kinFontPathForced) {
             loader._kinFontPathForced = true;
             loader.fontFilesPath = fontPath();
-            send("font path forced", {fontFilesPath: loader.fontFilesPath, href: window.location.href});
         }
         if (!fonts || !infos || !map || !app) return false;
         installKinFontPicker(fonts);
-        if (fonts._kinInnerFontDiagnosticsInstalled) return true;
-        fonts._kinInnerFontDiagnosticsInstalled = true;
-        send("font registry", {
-            allFontsVersion: window.__all_fonts_js_version__,
-            selectionBinBytes: window.g_fonts_selection_bin ? window.g_fonts_selection_bin.length : 0,
-            files: files && files.length,
-            infos: infos && infos.length,
-            symbolMode: {
-                files: fonts.g_font_files ? "source" : "minified",
-                infos: fonts.g_font_infos ? "source" : "minified",
-                map: fonts.g_map_font_index ? "source" : "minified",
-                app: fonts.g_fontApplication ? "source" : "minified"
-            },
-            selectionList: describeSelectionList(app),
-            arial: describeFont(fonts, "Arial"),
-            calibri: describeFont(fonts, "Calibri"),
-            dengxian: describeFont(fonts, "DengXian"),
-            dengxianLight: describeFont(fonts, "DengXian Light")
-        });
-        (files || []).forEach(function(file, index) {
-            if (!file || file._kinFontDiagnosticsWrapped || typeof file.LoadFontAsync !== "function") return;
-            file._kinFontDiagnosticsWrapped = true;
-            var originalLoadFontAsync = file.LoadFontAsync;
-            file.LoadFontAsync = function(basePath, callback) {
-                send("font load request", {index: index, id: fileId(file), basePath: basePath, status: file.Status, streamIndex: file.stream_index});
-                return originalLoadFontAsync.call(file, basePath, function() {
-                    var stream = fonts.g_fonts_streams && fonts.g_fonts_streams[file.stream_index];
-                    send("font load complete", {index: index, id: fileId(file), status: file.Status, streamIndex: file.stream_index, size: stream && stream.size, header: streamHeader(stream)});
-                    if (callback) callback();
-                });
-            };
-        });
         return true;
     }
     function ensureFontDropdownLabels() {
         try {
-            if (!/\\/documenteditor\\//.test(String(window.location.href || ""))) return;
+            if (!/\/documenteditor\//.test(String(window.location.href || ""))) return;
             var app = window.DE;
             if (!app || typeof app.getController !== "function") return;
             var toolbarCtrl = app.getController("Toolbar");
@@ -368,7 +240,7 @@ KIN_FONT_DEBUG_SCRIPT = """\
     }
     function installFontDropdownLabels() {
         try {
-            if (!/\\/documenteditor\\//.test(String(window.location.href || ""))) return;
+            if (!/\/documenteditor\//.test(String(window.location.href || ""))) return;
             if (window._kinFontDropdownLabelsInstalled) return;
             var app = window.DE;
             if (!app || typeof app.getController !== "function") return;
@@ -383,7 +255,6 @@ KIN_FONT_DEBUG_SCRIPT = """\
                 });
             }
             ensureFontDropdownLabels();
-            send("font dropdown labels installed", {});
         } catch (_error) {}
     }
     var attempts = 0;
@@ -397,7 +268,6 @@ KIN_FONT_DEBUG_SCRIPT = """\
             install();
             installFontDropdownLabels();
             ensureFontDropdownLabels();
-            send("font debug ready", {attempts: attempts});
         }
     }, 100);
 }();
@@ -442,45 +312,61 @@ def patch_html_runtime_deps(text: str, path: Path | None = None) -> str:
             ZLIB_SCRIPT,
             ZLIB_SCRIPT + "\n" + SDK_RUNTIME_SCRIPTS,
         )
-    font_debug_script = KIN_FONT_DEBUG_SCRIPT.replace("__KIN_OFFICE_BUILD_ID__", KIN_OFFICE_BUILD_ID)
     updated = re.sub(
-        r"<script>\n\+function kinOfficeFontDebug\(\)\{.*?\}\(\);\n</script>",
-        lambda _match: font_debug_script,
+        r"<script>\n\+function kinOfficeFont(?:Debug|Fix)\(\)\{.*?\}\(\);\n</script>",
+        lambda _match: KIN_FONT_FIX_SCRIPT,
         updated,
         flags=re.S,
     )
-    updated = updated.replace(
-        "        if (!fonts || fonts._kinInnerFontDiagnosticsInstalled) return !!fonts;",
-        "        if (!fonts || !fonts.g_font_files || !fonts.g_font_infos) return false;\n"
-        "        if (fonts._kinInnerFontDiagnosticsInstalled) return true;",
-    )
-    if "kinOfficeFontDebug" not in updated and "window.parentOrigin = params[\"parentOrigin\"];" in updated:
+    if "kinOfficeFontFix" not in updated and "window.parentOrigin = params[\"parentOrigin\"];" in updated:
         updated = updated.replace(
             "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>",
-            "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>\n       " + font_debug_script,
+            "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>\n       " + KIN_FONT_FIX_SCRIPT,
         )
-    if "kinOfficeFontDebug" not in updated and path and "documenteditor/main" in str(path) and "</head>" in updated:
-        updated = updated.replace("</head>", font_debug_script + "\n</head>", 1)
-    updated = re.sub(
-        r'(<script type="text/javascript" src="../../../../sdkjs/common/AllFonts\.js)(?:\?kinOfficeBuild=[^"]*)?("></script>)',
-        rf'\1?kinOfficeBuild={KIN_OFFICE_BUILD_ID}\2',
-        updated,
-    )
-    updated = re.sub(
-        r'(<script type="text/javascript" src="../../../../sdkjs/(?:word|cell|slide)/sdk-all-min\.js)(?:\?kinOfficeBuild=[^"]*)?("></script>)',
-        rf'\1?kinOfficeBuild={KIN_OFFICE_BUILD_ID}\2',
-        updated,
-    )
-    updated = re.sub(
-        r'(script\.src = "../../../apps/[^"]+/embed/app-all\.js)(?:\?kinOfficeBuild=[^"]*)?(")',
-        rf'\1?kinOfficeBuild={KIN_OFFICE_BUILD_ID}\2',
-        updated,
-    )
-    # Kin embeds the editor in an iframe — no service worker (avoids SSL scope issues).
+    if "kinOfficeFontFix" not in updated and path and "documenteditor/main" in str(path) and "</head>" in updated:
+        updated = updated.replace("</head>", KIN_FONT_FIX_SCRIPT + "\n</head>", 1)
+    updated = re.sub(r"\?kinOfficeBuild=[^\"'&\s]+", "", updated)
     updated = updated.replace(
         '+function registerServiceWorker(){if("serviceWorker"in navigator',
         '+function registerServiceWorker(){return;if("serviceWorker"in navigator',
     )
+    return updated
+
+
+def patch_skip_url_load_document(text: str, path: Path) -> str:
+    path_text = str(path)
+    if "/app/controller/Main.js" not in path_text:
+        return text
+    if "canSaveDocumentToBinary || (this.document && this.document.url)" in text:
+        return text
+    return LOAD_DOCUMENT_RE.sub(SKIP_URL_LOAD_DOCUMENT, text)
+
+
+BUILT_MAIN_APP_JS_REPLACEMENTS = {
+    "if(this._isDocReady||this._isPermissionsInited)this.api.asc_LoadDocument();else{":
+        "if(this._isDocReady||this._isPermissionsInited){if(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)this.api.asc_LoadDocument();return}else{",
+    "if(this._isDocReady||this._isPermissionsInited)return void this.api.asc_LoadDocument();":
+        "if(this._isDocReady||this._isPermissionsInited){if(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)this.api.asc_LoadDocument();return}",
+    ",this.api.asc_LoadDocument()}},loadCoAuthSettings:function(){":
+        ",(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)&&this.api.asc_LoadDocument()}},loadCoAuthSettings:function(){",
+    ",this.api.asc_LoadDocument()},loadCoAuthSettings:function(){":
+        ",(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)&&this.api.asc_LoadDocument()},loadCoAuthSettings:function(){",
+    "),this.api.asc_LoadDocument()},loadCoAuthSettings:function(){":
+        ",(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)&&this.api.asc_LoadDocument()},loadCoAuthSettings:function(){",
+    ",this.api.asc_LoadDocument())},loadCoAuthSettings:function(){":
+        ",(!this.appOptions.canSaveDocumentToBinary||this.document&&this.document.url)&&this.api.asc_LoadDocument())},loadCoAuthSettings:function(){",
+}
+
+
+def patch_built_main_app_js(text: str, path: Path) -> str:
+    path_text = str(path).replace("\\", "/")
+    if "/packages/kin-office/7/web-apps/apps/" not in path_text:
+        return text
+    if not path_text.endswith("/main/app.js"):
+        return text
+    updated = text
+    for old, new in BUILT_MAIN_APP_JS_REPLACEMENTS.items():
+        updated = updated.replace(old, new)
     return updated
 
 
@@ -491,37 +377,10 @@ def patch_file(path: Path) -> int:
     text = re.sub(r"(../../../../sdkjs/(?:word|cell|slide)/sdk-all)(?:-min)+(\.js)", r"\1-min\2", text)
     for old, new in REPLACEMENTS.items():
         text = text.replace(old, new)
+    text = patch_skip_url_load_document(text, path)
+    text = patch_built_main_app_js(text, path)
     if path.suffix == ".html":
         text = patch_html_runtime_deps(text, path)
-    if "require.config({baseUrl:\"../../\",paths:" in text:
-        text = text.replace(
-            "require.config({baseUrl:\"../../\",paths:",
-            f"require.config({{baseUrl:\"../../\",urlArgs:\"kinOfficeBuild={KIN_OFFICE_BUILD_ID}\",paths:",
-        )
-    previous_url_args = [
-        "urlArgs:\"kinOfficeBuild=20260603-cache5\",",
-        "urlArgs:\"kinOfficeBuild=20260603-cache6\",",
-        "urlArgs:\"kinOfficeBuild=20260603-cache7\",",
-        "urlArgs:\"kinOfficeBuild=20260603-cache8\",",
-        "urlArgs:\"kinOfficeBuild=20260603-cache9\",",
-        "urlArgs:\"kinOfficeBuild=20260603-cache10\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache11\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache12\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache13\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache14\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache15\",",
-        "urlArgs:\"kinOfficeBuild=20260604-cache16\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache17\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache18\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache19\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache20\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache21\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache22\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache23\",",
-        "urlArgs:\"kinOfficeBuild=20260606-cache24\",",
-    ]
-    for previous in previous_url_args:
-        text = text.replace(previous, f"urlArgs:\"kinOfficeBuild={KIN_OFFICE_BUILD_ID}\",")
     for editor, sdk_alias in EDITOR_SDK_ALIASES.items():
         if editor in path.parts:
             text = text.replace("../../sdkjs/source-loader/loaded", sdk_alias)
@@ -538,50 +397,6 @@ def patch_file(path: Path) -> int:
     text = text.replace(
         "imgidx:t.asc_getFontThumbnail()",
         "imgidx:-1",
-    )
-    text = text.replace(
-        'var params = "?_dc=0";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260604-cache14";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260604-cache15";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260604-cache16";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache17";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache18";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache19";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache20";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache21";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache23";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
-    )
-    text = text.replace(
-        'var params = "?_dc=20260606-cache24";',
-        f'var params = "?_dc={KIN_OFFICE_BUILD_ID}";',
     )
     text = text.replace(FONT_COMBO_TEMPLATE_OLD, FONT_COMBO_TEMPLATE_NEW)
     text = text.replace(FONT_COMBO_TILE_SKIP_N, FONT_COMBO_TILE_LABEL_N)

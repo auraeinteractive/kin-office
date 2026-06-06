@@ -95,7 +95,7 @@ export class storeTextSettings {
                 id          : fontId,
                 name        : font.asc_getFontName(),
                 //displayValue: font.asc_getFontName(),
-                imgidx      : font.asc_getFontThumbnail(),
+                imgidx      : -1,
                 type        : font.asc_getFontType()
             });
         }

@@ -1676,7 +1676,7 @@ define([
                 }
                 if ( this.onServerVersion(params.asc_getBuildVersion()) || !this.onLanguageLoaded() ) return;
                 if ( this._isDocReady || this._isPermissionsInited ) {
-                    this.api.asc_LoadDocument();
+                    if (!this.appOptions.canSaveDocumentToBinary || (this.document && this.document.url)) { this.api.asc_LoadDocument(); }
                     return;
                 }
 
@@ -1850,7 +1850,7 @@ define([
                 if (this.appOptions.isRestrictedEdit && this.appOptions.canFillForms) {
                     this.api.asc_setRestriction(Asc.c_oAscRestrictionType.OnlyForms);
                 }
-                this.api.asc_LoadDocument();
+                if (!this.appOptions.canSaveDocumentToBinary || (this.document && this.document.url)) { this.api.asc_LoadDocument(); }
             },
 
             loadCoAuthSettings: function() {

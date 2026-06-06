@@ -307,7 +307,7 @@ define([
                         '<li class="divider">',
                     '<% _.each(items, function(item) { %>',
                         '<li id="<%= item.id %>">',
-                            '<a class="font-item" tabindex="-1" type="menuitem" role="menuitemcheckbox" aria-checked="false" style="height:<%=scope.getListItemHeight()%>px;"></a>',
+                            '<a class="font-item" tabindex="-1" type="menuitem" role="menuitemcheckbox" aria-checked="false" style="height:<%=scope.getListItemHeight()%>px;"><span class="font-item-label" style="display:inline-block;padding:0 8px;line-height:28px;"><%= item.name %></span></a>',
                         '</li>',
                     '<% }); %>',
                     '</ul>',
@@ -629,7 +629,7 @@ define([
             onInsertItem: function(item) {
                 $(this.el).find('ul').prepend(_.template([
                     '<li id="<%= item.id %>">',
-                        '<a class="font-item" tabindex="-1" type="menuitem" role="menuitemcheckbox" aria-checked="false" style="height:<%=scope.getListItemHeight()%>px;"></a>',
+                        '<a class="font-item" tabindex="-1" type="menuitem" role="menuitemcheckbox" aria-checked="false" style="height:<%=scope.getListItemHeight()%>px;"><span class="font-item-label" style="display:inline-block;padding:0 8px;line-height:28px;"><%= item.name %></span></a>',
                     '</li>'
                 ].join(''))({
                     item: item.attributes,
