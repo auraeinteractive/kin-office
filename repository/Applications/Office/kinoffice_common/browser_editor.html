@@ -57,6 +57,8 @@
                 containerId: 'editor',
                 fileName: data.fileName || 'Document.docx',
                 fileType: data.fileType || 'docx',
+                kinPath: data.kinPath || '',
+                sessionId: data.sessionId || '',
                 bytes: base64ToBytes(data.data_base64 || ''),
                 isNew: !!data.isNew,
                 lang: data.lang || 'en',

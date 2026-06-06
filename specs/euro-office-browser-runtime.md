@@ -132,6 +132,45 @@ Do not use upstream `asc_Save()` or `downloadAs()` for Kin persistence. Those en
 
 For export, `browser_editor_adapter.js` serializes the current editor state through the source-level/native APIs above, preserves or creates a valid internal `DOCY/XLSY/PPTY` payload, and runs x2t back to DOCX/XLSX/PPTX. Kin then validates the returned bytes as a ZIP before writing them to the Kin filesystem.
 
+## Collaboration Hooks
+
+Kin Office does not use Euro-Office's upstream Document Server, but it now uses Euro-Office's browser co-authoring API through a Kin service-backed transport. This is intentionally implemented in `browser_editor_adapter.js`, not by hand-editing generated vendor files.
+
+Important current caveat: collaborative editing is not working yet. The adapter can locate and initialize the packaged Docs co-authoring wrapper, but the Kin generic stream WebSocket currently fails before reaching the repo-owned collab service. See [Kin Office Collaboration: Current Blocker](./kin-office-collaboration.md#current-blocker).
+
+Important Euro-Office behavior that the adapter depends on:
+
+- `sdkjs/common/docscoapi.js` exposes `AscCommon.CDocsCoApi`, which wraps the internal `DocsCoApi` co-authoring transport.
+- `CDocsCoApi.init(...)` only enables online work when the internal `DocsCoApi.isRightURL()` is true. `isRightURL()` is true only after `CoAuthoringApi.set_url(...)` receives a non-empty URL.
+- In the normal server open path, `api.asc_LoadDocument()` calls `api.CoAuthoringApi.auth(...)` and then server callbacks open the file.
+- Kin's local binary open path deliberately does not call `asc_LoadDocument()`, because upstream open would attempt to fetch/convert through server URLs. Kin already opens with `editor.openDocument({ buffer })` after browser x2t conversion.
+- Therefore, after `editor.openDocument({ buffer })`, the adapter explicitly starts co-authoring for Kin-backed existing files by setting a non-empty `api.CoAuthoringApi` URL, calling `api.CoAuthoringApi.init(...)` with the Kin document id/user/doc info, waiting until the socket reaches a positive connection state, and then calling `api.CoAuthoringApi.auth(false, null)`.
+- Euro-Office computes the active user connection id as `userId + indexUser` after auth. The Kin collaboration service must report participants using that value in participant `id`, while preserving the original Kin user in `idOriginal`.
+
+Packaged runtime caveat:
+
+- The generated packaged SDK may not expose the co-authoring wrapper as readable `api.CoAuthoringApi`. In tested packaged builds, source names such as `CoAuthoringApi`, `CDocsCoApi`, `set_url`, and `isRightURL` can be minified or removed from `sdk-all-min.js`.
+- `browser_editor_adapter.js` therefore locates the co-authoring wrapper by method shape rather than name. It scans `main.api`, `Asc.editor`, `window.editor`, and `window.api`, including non-enumerable properties and prototype-chain properties.
+- A candidate is treated as a co-authoring wrapper when it exposes the expected method cluster, including `init`, `auth`, `getUsers`, `saveChanges`, `askLock`, `unSaveLock`, or `disconnect`.
+- In `20260606-cache25` packaged Docs, the wrapper was observed as `api.Il`, with `Qe(...)` corresponding to source `CDocsCoApi.init(...)`, `i8b(...)` corresponding to source `CDocsCoApi.set_url(...)`, `t1b()` corresponding to source `get_state()`, and `vxe()` corresponding to source `getUsers()`. The adapter explicitly supports these minified names.
+- The same packaged build calls the Socket.IO factory as `AscCommon.JQi()` instead of source `AscCommon.getSocketIO()`. The adapter must override both names before co-authoring init.
+- The online branch in packaged Docs is gated by `api.Il.On.YUe()`, which checks that the private URL marker `api.Il.On.ccb` is non-empty. The adapter must set this marker directly, or via `api.Il.On.i8b(url)`, before calling `api.Il.Qe(...)`.
+- The adapter also forces `window.IS_NATIVE_EDITOR = false` in the inner editor before co-authoring init. The packaged transport can otherwise enter the native/SockJS branch instead of the browser Socket.IO factory path.
+- If the packaged runtime still does not call the patched factory, the adapter installs the Kin WebSocket shim directly on the minified transport object (`api.Il.On.zha`) and routes incoming service messages to `api.Il.On.w5h(...)`. On WebSocket connect it calls `api.Il.On.x5h()` to move the transport into the authenticated-ready connection state before `auth()` is sent.
+- The same packaged build calls user getters through minified methods: `vca()` for user id, `hna()` for username, `hud()` for first name, and `nud()` for last name. If `AscCommon.asc_CUser` is not available by source name, the adapter creates a small user object that implements both source `asc_get*` methods and these minified methods.
+- Euro-Office client outbound messages are not always in the same shape as inbound server messages. The Kin collaboration service must transform outbound `saveChanges` and `cursor` into server-format messages before broadcasting them to other editors. See `specs/kin-office-collaboration.md` for the required message shapes.
+- When found under a minified property, the adapter aliases it back to `api.CoAuthoringApi` for the rest of Kin's code path.
+- If not found, the adapter logs structured diagnostics with root labels, method keys, and object keys. Keep this diagnostic because it is the fastest way to adapt to future Euro-Office minifier/runtime changes.
+- The adapter also forces the non-empty co-authoring URL on the wrapper or nested transport object. This is needed because source `DocsCoApi.isRightURL()` gates online work on a private URL marker that can be minified in packaged builds.
+
+The adapter also installs a Socket.IO-compatible shim before co-authoring starts:
+
+```text
+AscCommon.getSocketIO() -> Kin raw WebSocket shim -> /stream-connection/ws?ticket=...&host=...&port=...&tls=0
+```
+
+If Euro-Office changes `docscoapi.js`, `baseEditorsApi.asc_LoadDocument()`, co-authoring wrapper method names, private URL gating, minification behavior, or participant identity semantics, first re-check this section and `specs/kin-office-collaboration.md` before changing runtime behavior. Do not hand-edit generated vendor files for this; encode any required adaptation in `browser_editor_adapter.js` or a repeatable patch script.
+
 ## Required Web-App Patches
 
 `scripts/patch-euro-office-save-hooks.py` currently handles:

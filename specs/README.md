@@ -6,11 +6,16 @@ This directory is the working specification set for Kin Office. Agents should tr
 
 - [Euro-Office Browser Runtime](./euro-office-browser-runtime.md)
 - [Kin Office Architecture](./kin-office-architecture.md)
+- [Kin Office Collaboration](./kin-office-collaboration.md)
 - [Font rendering bug (resolved)](./problems/font-problem.md)
 
 ## Current Scope
 
 Kin Office runs Docs, Sheets, and Slides inside Kin using Euro-Office browser assets. It opens and saves DOCX, XLSX, and PPTX files directly through Kin filesystem APIs without a Docker runtime, Document Server, direct connector, Nextcloud, OIDC, or standalone static server.
+
+Collaboration uses Kin's authenticated stream WebSocket layer through this repo's `services/kinoffice-collab/`; live presence and locks are not stored in per-file `.info` files. Kin Office must not add service source, manager entries, routes, or build rules to the Kin core repository.
+
+Collaboration is currently disabled pending the follow-up work in [Collaboration Future Plan](./plans/collaboration.md).
 
 The current implementation deliberately uses a browser-owned open/export path:
 

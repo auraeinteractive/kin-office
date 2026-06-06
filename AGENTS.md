@@ -7,6 +7,7 @@ Before changing architecture, runtime loading, save/open behavior, fonts, build 
 - [Specs index](specs/README.md)
 - [Euro-Office Browser Runtime](specs/euro-office-browser-runtime.md)
 - [Kin Office Architecture](specs/kin-office-architecture.md)
+- [Kin Office Collaboration](specs/kin-office-collaboration.md)
 
 ## Current Goal
 
@@ -21,6 +22,7 @@ Kin Office should open and save DOCX, XLSX, and PPTX files inside Kin through br
 - Do not hand-edit downloaded/generated vendor files when a script can express the change.
 - Keep Kin file persistence in `repository/Applications/Office/kinoffice_common/office_app.js`.
 - Keep Euro-Office browser adaptation in `repository/Applications/Office/kinoffice_common/browser_editor_adapter.js`.
+- Keep Kin Office collaboration service source in `services/kinoffice-collab/`; do not add Kin Office services, routes, manager workers, or build entries to the Kin core repository.
 - Kin Office must run inside Kin. Do not start standalone static servers outside Kin.
 - Never hardcode hostnames. Use `window.location.origin`, Kin config, `.config.ini`, or forwarded headers as appropriate.
 
@@ -36,6 +38,7 @@ repository/Applications/Office/kinoffice_sheets/
 repository/Applications/Office/kinoffice_slides/
 repository/Applications/Office/kinoffice_common/
 commands/kinoffice.cmd/
+services/kinoffice-collab/
 scripts/
 specs/
 ```
@@ -48,6 +51,7 @@ specs/
 python3 scripts/generate-kinoffice-allfonts.py
 python3 scripts/patch-euro-office-save-hooks.py repository/Applications/Office/kinoffice_common/vendor/kin-office/packages/kin-office/7/web-apps
 ./scripts/build-kinoffice-cmd.sh
+./scripts/build-kinoffice-collab-service.sh
 ./deploy.sh --to-kin
 sudo ./deploy.sh --deploy-mode
 ./build-apps.sh
@@ -62,6 +66,12 @@ node --check repository/Applications/Office/kinoffice_docs/app.js
 node --check repository/Applications/Office/kinoffice_sheets/app.js
 node --check repository/Applications/Office/kinoffice_slides/app.js
 python3 -m py_compile scripts/generate-kinoffice-allfonts.py scripts/patch-euro-office-save-hooks.py
+make -C services/kinoffice-collab
 ```
 
-Deploy with `./deploy.sh --to-kin` for Kin-build testing. The deploy script installs only `kinoffice_*` apps and the `kinoffice` Kin command into the Kin build; it does not reload Kin nginx.
+Deploy with `./deploy.sh --to-kin` for Kin-build testing. The deploy script installs only `kinoffice_*` apps, the `kinoffice` Kin command, and the repo-owned `kinoffice-collab.service` into the Kin build; it does not modify Kin source or reload Kin nginx.
+
+
+## House cleaning
+
+Don't put stuff directly in the kin repository. We are kin-office, and we install stuff to kin, but we are not merging into or tainting the kin repository. If a Kin Office feature needs a service, route, command, or package asset, keep its source in this repo and deploy/package it from this repo.

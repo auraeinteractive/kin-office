@@ -80,6 +80,8 @@ install_to_kin() {
     done
     RELEASE=$(date -u +%Y%m%d%H%M%S)
     printf '{"release":"%s"}\n' "$RELEASE" > "$OFFICE_DEST/kinoffice_common/release.json"
+    printf '{"enabled":false,"host":"%s","port":%s,"tls":false}\n' \
+        "${KINOFFICE_COLLAB_HOST:-127.0.0.1}" "${KINOFFICE_COLLAB_PORT:-19129}" > "$OFFICE_DEST/kinoffice_common/collab_config.json"
     echo "Stamped $OFFICE_DEST/kinoffice_common/release.json ($RELEASE)"
     echo "Apps installed to Kin build (kinoffice_* only; other Office apps untouched)."
 }
@@ -101,6 +103,25 @@ install_kinoffice_cmd() {
     mkdir -p "$DEST"
     install -m 755 "$CMD_SRC" "$DEST/kinoffice"
     echo "Installed $DEST/kinoffice"
+}
+
+install_kinoffice_collab_service() {
+    if [ -z "$KIN_BUILD_PATH" ]; then
+        return
+    fi
+    SERVICE_SRC="$SCRIPT_DIR/services/kinoffice-collab/kinoffice-collab.service"
+    if [ ! -x "$SERVICE_SRC" ]; then
+        echo "Building kinoffice-collab service..."
+        "$SCRIPT_DIR/scripts/build-kinoffice-collab-service.sh"
+    fi
+    if [ ! -x "$SERVICE_SRC" ]; then
+        echo "Error: kinoffice-collab service not built at $SERVICE_SRC"
+        return 1
+    fi
+    DEST="$KIN_BUILD_PATH/services"
+    mkdir -p "$DEST"
+    install -m 755 "$SERVICE_SRC" "$DEST/kinoffice-collab.service"
+    echo "Installed $DEST/kinoffice-collab.service"
 }
 
 load_config
@@ -138,6 +159,11 @@ echo "=== Installing to Kin build ==="
 if [ -n "$KIN_BUILD_PATH" ]; then
     install_to_kin
     install_kinoffice_cmd
+    if [ "${KINOFFICE_COLLAB_ENABLE:-0}" = "1" ]; then
+        install_kinoffice_collab_service
+    else
+        echo "Kin Office collaboration disabled; not installing kinoffice-collab.service"
+    fi
 else
     echo "KIN_BUILD_PATH not set, skipping Kin install"
 fi

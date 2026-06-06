@@ -79,6 +79,19 @@ Kin workspace
                     +-- sdkjs/{word,cell,slide}/sdk-all-min.js
 ```
 
+Collaboration adds a Kin-side service path:
+
+```text
+browser_editor_adapter.js
+  -> POST /api/commands/kinoffice action=session
+  -> POST /api/stream-connection/ws-ticket
+  -> WebSocket /stream-connection/ws?ticket=...&host=...&port=...&tls=0
+  -> Kin stream proxy
+  -> services/kinoffice-collab/kinoffice-collab.service from this repo
+```
+
+Live collaboration state belongs to `kinoffice-collab.service`, not to document `.info` files. See [Kin Office Collaboration](./kin-office-collaboration.md).
+
 All URL construction must use Kin-relative paths and `window.location.origin`. Do not hardcode hostnames.
 
 ## Opening Existing Files
@@ -242,9 +255,10 @@ kinoffice_docs
 kinoffice_sheets
 kinoffice_slides
 commands/kinoffice
+services/kinoffice-collab.service
 ```
 
-It does not delete unrelated Kin paths and does not reload Kin nginx.
+The service source remains in this repository under `services/kinoffice-collab/`; deploy/package steps copy the built binary into Kin runtime locations. It does not delete unrelated Kin paths, modify Kin source, or reload Kin nginx.
 
 ## Verification Checklist
 
@@ -257,6 +271,7 @@ node --check repository/Applications/Office/kinoffice_docs/app.js
 node --check repository/Applications/Office/kinoffice_sheets/app.js
 node --check repository/Applications/Office/kinoffice_slides/app.js
 python3 -m py_compile scripts/generate-kinoffice-allfonts.py scripts/patch-euro-office-save-hooks.py
+make -C services/kinoffice-collab
 ./deploy.sh --to-kin
 ```
 

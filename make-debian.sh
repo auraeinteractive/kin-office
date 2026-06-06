@@ -64,6 +64,17 @@ fi
 mkdir -p "$MODULE_DIR/commands"
 install -m 755 "$ROOT/commands/kinoffice.cmd/kinoffice" "$MODULE_DIR/commands/kinoffice"
 
+# Copy Kin Office collaboration service for future opt-in use (not enabled by default).
+if [ ! -x "$ROOT/services/kinoffice-collab/kinoffice-collab.service" ]; then
+	"$ROOT/scripts/build-kinoffice-collab-service.sh"
+fi
+mkdir -p "$MODULE_DIR/services"
+install -m 755 "$ROOT/services/kinoffice-collab/kinoffice-collab.service" "$MODULE_DIR/services/kinoffice-collab.service"
+
+# Service runtime config consumed by the browser app after postinst copies repository assets.
+printf '{"enabled":false,"host":"127.0.0.1","port":19129,"tls":false}\n' \
+    > "$MODULE_DIR/repository/Applications/Office/kinoffice_common/collab_config.json"
+
 # Copy specs/ if present
 if [[ -d "$ROOT/specs" ]]; then
 	cp -a "$ROOT/specs" "$MODULE_DIR/"
@@ -100,13 +111,43 @@ if [ -x /opt/kin/modules/kin-office/commands/kinoffice ]; then
     mkdir -p /usr/lib/kin/commands
     install -m 755 /opt/kin/modules/kin-office/commands/kinoffice /usr/lib/kin/commands/kinoffice
 fi
-echo "kin-office: installed browser-only apps and kinoffice command; no service or Docker containers are required"
+if [ -x /opt/kin/modules/kin-office/services/kinoffice-collab.service ]; then
+    mkdir -p /usr/lib/kin/services
+    install -m 755 /opt/kin/modules/kin-office/services/kinoffice-collab.service /usr/lib/kin/services/kinoffice-collab.service
+fi
+if command -v systemctl >/dev/null 2>&1 && [ -f /lib/systemd/system/kin-office-collab.service ]; then
+    systemctl daemon-reload || true
+fi
+echo "kin-office: installed browser apps and kinoffice command; collaboration service is installed but disabled"
 POSTINST
 chmod 755 "$STAGE/DEBIAN/postinst"
+
+mkdir -p "$STAGE/lib/systemd/system"
+cat >"$STAGE/lib/systemd/system/kin-office-collab.service" <<'UNIT'
+[Unit]
+Description=Kin Office Collaboration Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/kin/services/kinoffice-collab.service --host 127.0.0.1 --port 19129
+Restart=on-failure
+RestartSec=1
+User=kin
+Group=kin
+
+[Install]
+WantedBy=multi-user.target
+UNIT
 
 cat >"$STAGE/DEBIAN/prerm" <<'PRERM'
 #!/bin/bash
 set -e
+if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now kin-office-collab.service 2>/dev/null || true
+    fi
+fi
 exit 0
 PRERM
 chmod 755 "$STAGE/DEBIAN/prerm"

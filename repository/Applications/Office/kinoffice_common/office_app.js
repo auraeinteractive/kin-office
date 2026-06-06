@@ -810,6 +810,7 @@ export function bootstrapKinOfficeApp(config) {
             command: 'open',
             requestId: reqId,
             sessionId: session.id,
+            kinPath: session.kinPath || '',
             fileName: currentFilename,
             fileType: currentFileType,
             isNew: session.isNew,
