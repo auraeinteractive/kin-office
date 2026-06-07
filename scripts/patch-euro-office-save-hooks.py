@@ -274,6 +274,35 @@ KIN_FONT_FIX_SCRIPT = r"""\
 </script>"""
 
 
+def is_editor_main_html(path: Path | None) -> bool:
+    if not path:
+        return False
+    path_text = str(path).replace("\\", "/")
+    if not any(f"/{editor}/main/" in path_text for editor in ("documenteditor", "spreadsheeteditor", "presentationeditor")):
+        return False
+    return path.name.startswith("index") and path.suffix == ".html"
+
+
+def normalize_save_hooks(text: str) -> str:
+    updated = text
+    while True:
+        previous = updated
+        updated = re.sub(
+            r"(window\.KinOfficeDirectSave&&window\.KinOfficeDirectSave\(\)\|\|)\s*"
+            r"\(window\.KinOfficeDirectSave\s*&&\s*window\.KinOfficeDirectSave\(\)\)\s*\|\|\s*",
+            r"\1",
+            updated,
+        )
+        updated = re.sub(
+            r"(\(window\.KinOfficeDirectSave\s*&&\s*window\.KinOfficeDirectSave\(\)\)\s*\|\|)\s*"
+            r"\(window\.KinOfficeDirectSave\s*&&\s*window\.KinOfficeDirectSave\(\)\)\s*\|\|\s*",
+            r"\1",
+            updated,
+        )
+        if updated == previous:
+            return updated
+
+
 def patch_html_runtime_deps(text: str, path: Path | None = None) -> str:
     updated = text
     # Kin runs in a browser iframe, not the native desktop shell.
@@ -323,7 +352,7 @@ def patch_html_runtime_deps(text: str, path: Path | None = None) -> str:
             "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>",
             "            window.parentOrigin = params[\"parentOrigin\"];\n        </script>\n       " + KIN_FONT_FIX_SCRIPT,
         )
-    if "kinOfficeFontFix" not in updated and path and "documenteditor/main" in str(path) and "</head>" in updated:
+    if "kinOfficeFontFix" not in updated and path and is_editor_main_html(path) and "</head>" in updated:
         updated = updated.replace("</head>", KIN_FONT_FIX_SCRIPT + "\n</head>", 1)
     updated = re.sub(r"\?kinOfficeBuild=[^\"'&\s]+", "", updated)
     updated = updated.replace(
@@ -377,6 +406,7 @@ def patch_file(path: Path) -> int:
     text = re.sub(r"(../../../../sdkjs/(?:word|cell|slide)/sdk-all)(?:-min)+(\.js)", r"\1-min\2", text)
     for old, new in REPLACEMENTS.items():
         text = text.replace(old, new)
+    text = normalize_save_hooks(text)
     text = patch_skip_url_load_document(text, path)
     text = patch_built_main_app_js(text, path)
     if path.suffix == ".html":

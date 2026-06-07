@@ -56,6 +56,14 @@ function validateOfficeBytes(bytes) {
     if (!isZipLocalHeader(bytes)) throw new Error('File is not a valid Office document (missing ZIP header)');
 }
 
+function validateOfficePackageMembers(bytes, fileType) {
+    if (fileType !== 'xlsx') return;
+    const entries = parseOfficeZipEntries(bytes);
+    if (!entries.has('[Content_Types].xml') || !entries.has('xl/workbook.xml')) {
+        throw new Error('Exported XLSX is missing required workbook members');
+    }
+}
+
 function isKinOnlyOfficeAppId(value) {
     return String(value || '').trim().indexOf('kinonlyoffice') === 0;
 }
@@ -693,10 +701,18 @@ export function bootstrapKinOfficeApp(config) {
         const exported = await exportLocalDocument();
         const bytes = exported.bytes;
         validateOfficeBytes(bytes);
+        validateOfficePackageMembers(bytes, currentFileType);
         const targetSha256 = await sha256Hex(bytes);
         if (targetSha256 === currentBaselineSha256) {
             currentDirty = false;
             return { bytes, skipped: true };
+        }
+        if (currentFileType === 'xlsx') {
+            await writeKinFileBytesSafe(currentKinPath, bytes);
+            await updateBaseline(bytes);
+            currentDirty = false;
+            postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });
+            return { bytes, skipped: false };
         }
         const patchBytes = createOfficePackagePatchBytes(currentBaselineBytes, bytes);
         await applyKinOfficePatch(currentKinPath, currentFileType, currentBaselineSha256, targetSha256, patchBytes, reason || 'save');
@@ -867,6 +883,7 @@ export function bootstrapKinOfficeApp(config) {
             const exported = await exportLocalDocument();
             const bytes = exported.bytes;
             validateOfficeBytes(bytes);
+            validateOfficePackageMembers(bytes, exported.fileType || currentFileType);
             await writeKinFileBytesSafe(targetPath, bytes);
             currentKinPath = targetPath;
             currentFilename = kinPathBaseName(targetPath) || exported.fileName || currentFilename;

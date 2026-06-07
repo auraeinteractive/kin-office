@@ -26,6 +26,18 @@ Kin Office should open and save DOCX, XLSX, and PPTX files inside Kin through br
 - Kin Office must run inside Kin. Do not start standalone static servers outside Kin.
 - Never hardcode hostnames. Use `window.location.origin`, Kin config, `.config.ini`, or forwarded headers as appropriate.
 
+## Save/Open Safety Rules
+
+Saving and loading are the paramount responsibilities of Kin Office. Treat open, export, Save, Save As, autosave, patch save, x2t conversion, and serializer code as high-risk persistence code.
+
+- If the user says one app's saving/loading works, do not change that app's save/open/export path while fixing another app unless the user explicitly asks for it.
+- Do not make shared persistence or adapter changes that alter Docs behavior when the task is about Sheets or Slides. Add file-type guards or app-specific handling instead.
+- Before changing save/open/export code, identify the exact affected app types (`docx`, `xlsx`, `pptx`) and state which paths will remain untouched.
+- Preserve the known-good path first. Prefer the smallest app-specific fix over a broad cleanup, refactor, or shared abstraction.
+- Do not change x2t format IDs, serializer order, internal-bin wrapping, baseline handling, patch-save logic, or generated save hooks for a working app without an explicit regression test reason.
+- After any save/open/export change, verify the touched app and also smoke-test any app that shares the modified code path. If you cannot run Kin UI testing, say so clearly and do not claim the behavior is fixed.
+- If a persistence regression appears, stop feature work and restore the last known-good behavior for the regressed app before continuing.
+
 ## Important Current Caveat
 
 Fonts are still an active issue. Euro-Office document/canvas text is rendered by its own font engine, not normal HTML/CSS fonts. Future work should debug `AscFonts`, generated `AllFonts.js`, ODTTF font files, face indexes, and glyph coverage. See [Euro-Office Browser Runtime: Fonts](specs/euro-office-browser-runtime.md#fonts).

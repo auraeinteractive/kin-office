@@ -146,6 +146,7 @@
         var infos = fontInfos(fonts);
         var map = fontNameMap(fonts);
         var app = fontApplication(fonts);
+        installInnerSheetsTabLabels(inner, fileType);
         if (loader && !loader._kinParentFontPathForced) {
             loader._kinParentFontPathForced = true;
             loader.fontFilesPath = innerFontPath(inner);
@@ -156,6 +157,41 @@
         installInnerPackagedFontPicker(inner, fonts);
         installInnerFontDropdownLabels(inner, fileType);
         return true;
+    }
+
+    function installInnerSheetsTabLabels(inner, fileType) {
+        if (fileType !== 'xlsx') return;
+        try {
+            if (inner._kinParentSheetsTabLabelsInstalled) return;
+            inner._kinParentSheetsTabLabelsInstalled = true;
+
+            function ensureLabels() {
+                var doc = inner.document;
+                if (!doc) return;
+                var tabs = doc.querySelectorAll('#statusbar_bottom li.list-item[data-label] > span');
+                for (var i = 0; i < tabs.length; i += 1) {
+                    var span = tabs[i];
+                    var li = span.parentNode;
+                    var label = li && li.getAttribute ? li.getAttribute('data-label') : '';
+                    if (!label) continue;
+                    if (!String(span.textContent || '').trim()) span.appendChild(doc.createTextNode(label));
+                    span.style.color = 'var(--text-normal, #000)';
+                    span.style.fontFamily = 'Arial, Helvetica, sans-serif';
+                    span.style.fontSize = '12px';
+                }
+            }
+
+            ensureLabels();
+            if (inner.Common && inner.Common.NotificationCenter) {
+                inner.Common.NotificationCenter.on('uitheme:changed', function() {
+                    inner.setTimeout(ensureLabels, 0);
+                });
+            }
+            var observer = inner.MutationObserver ? new inner.MutationObserver(ensureLabels) : null;
+            if (observer && inner.document && inner.document.body) {
+                observer.observe(inner.document.body, { childList: true, subtree: true });
+            }
+        } catch (_error) {}
     }
 
     function installInnerFontDropdownLabels(inner, fileType) {
@@ -700,6 +736,26 @@
         } finally {
             nativeHost.Save_End = originalSaveEnd;
         }
+    }
+
+    function prepareCurrentEditorForExport(fileType) {
+        if (fileType !== 'xlsx') return Promise.resolve();
+        var main = getMainController(fileType);
+        var api = main.api;
+        if (api && typeof api.asc_closeCellEditor === 'function' && api.asc_closeCellEditor() === false) {
+            throw new Error('Could not finish the current cell edit before saving.');
+        }
+        var inner = getInnerWindow();
+        return new Promise(function(resolve) {
+            function afterFrame() {
+                inner.setTimeout(resolve, 0);
+            }
+            if (typeof inner.requestAnimationFrame === 'function') {
+                inner.requestAnimationFrame(afterFrame);
+            } else {
+                inner.setTimeout(afterFrame, 0);
+            }
+        });
     }
 
     function serializeCurrentBin(fileType) {
@@ -1641,14 +1697,16 @@
                         }
                         // Kin direct-save path: do not call asc_Save() or downloadAs().
                         // Those APIs enter the upstream server/collaboration save state machine.
-                        var bin = serializeCurrentBin(fileType);
-                        if (isZipBytes(bin)) {
-                            resolve({ fileName: fileName, fileType: fileType, bytes: bin });
-                            return;
-                        }
-                        convertBinToDocument(bin, fileName, fileType, sourcePayload)
-                            .then(function(bytes) { resolve({ fileName: fileName, fileType: fileType, bytes: bytes }); })
-                            .catch(reject);
+                        prepareCurrentEditorForExport(fileType).then(function() {
+                            var bin = serializeCurrentBin(fileType);
+                            if (isZipBytes(bin)) {
+                                resolve({ fileName: fileName, fileType: fileType, bytes: bin });
+                                return;
+                            }
+                            convertBinToDocument(bin, fileName, fileType, sourcePayload)
+                                .then(function(bytes) { resolve({ fileName: fileName, fileType: fileType, bytes: bytes }); })
+                                .catch(reject);
+                        }).catch(reject);
                     });
                 }
             };
