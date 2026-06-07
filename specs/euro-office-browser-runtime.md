@@ -136,7 +136,7 @@ For export, `browser_editor_adapter.js` serializes the current editor state thro
 
 Kin Office does not use Euro-Office's upstream Document Server, but it now uses Euro-Office's browser co-authoring API through a Kin service-backed transport. This is intentionally implemented in `browser_editor_adapter.js`, not by hand-editing generated vendor files.
 
-Important current caveat: collaborative editing is not working yet. The adapter can locate and initialize the packaged Docs co-authoring wrapper, but the Kin generic stream WebSocket currently fails before reaching the repo-owned collab service. See [Kin Office Collaboration: Current Blocker](./kin-office-collaboration.md#current-blocker).
+Important current caveat: collaborative editing is diagnostics-first. The adapter can locate and initialize the packaged Docs co-authoring wrapper, and now uses the Kin Office command bridge instead of Kin's generic stream WebSocket proxy. See [Kin Office Collaboration](./kin-office-collaboration.md).
 
 Important Euro-Office behavior that the adapter depends on:
 
@@ -156,7 +156,7 @@ Packaged runtime caveat:
 - The same packaged build calls the Socket.IO factory as `AscCommon.JQi()` instead of source `AscCommon.getSocketIO()`. The adapter must override both names before co-authoring init.
 - The online branch in packaged Docs is gated by `api.Il.On.YUe()`, which checks that the private URL marker `api.Il.On.ccb` is non-empty. The adapter must set this marker directly, or via `api.Il.On.i8b(url)`, before calling `api.Il.Qe(...)`.
 - The adapter also forces `window.IS_NATIVE_EDITOR = false` in the inner editor before co-authoring init. The packaged transport can otherwise enter the native/SockJS branch instead of the browser Socket.IO factory path.
-- If the packaged runtime still does not call the patched factory, the adapter installs the Kin WebSocket shim directly on the minified transport object (`api.Il.On.zha`) and routes incoming service messages to `api.Il.On.w5h(...)`. On WebSocket connect it calls `api.Il.On.x5h()` to move the transport into the authenticated-ready connection state before `auth()` is sent.
+- If the packaged runtime still does not call the patched factory, the adapter installs the Kin command bridge shim directly on the minified transport object (`api.Il.On.zha`) and routes incoming service messages to `api.Il.On.w5h(...)`. On bridge connect it calls `api.Il.On.x5h()` to move the transport into the authenticated-ready connection state before `auth()` is sent.
 - The same packaged build calls user getters through minified methods: `vca()` for user id, `hna()` for username, `hud()` for first name, and `nud()` for last name. If `AscCommon.asc_CUser` is not available by source name, the adapter creates a small user object that implements both source `asc_get*` methods and these minified methods.
 - Euro-Office client outbound messages are not always in the same shape as inbound server messages. The Kin collaboration service must transform outbound `saveChanges` and `cursor` into server-format messages before broadcasting them to other editors. See `specs/kin-office-collaboration.md` for the required message shapes.
 - When found under a minified property, the adapter aliases it back to `api.CoAuthoringApi` for the rest of Kin's code path.
@@ -166,7 +166,7 @@ Packaged runtime caveat:
 The adapter also installs a Socket.IO-compatible shim before co-authoring starts:
 
 ```text
-AscCommon.getSocketIO() -> Kin raw WebSocket shim -> /stream-connection/ws?ticket=...&host=...&port=...&tls=0
+AscCommon.getSocketIO() -> Kin command bridge shim -> /api/commands/kinoffice
 ```
 
 If Euro-Office changes `docscoapi.js`, `baseEditorsApi.asc_LoadDocument()`, co-authoring wrapper method names, private URL gating, minification behavior, or participant identity semantics, first re-check this section and `specs/kin-office-collaboration.md` before changing runtime behavior. Do not hand-edit generated vendor files for this; encode any required adaptation in `browser_editor_adapter.js` or a repeatable patch script.

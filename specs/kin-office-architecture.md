@@ -84,9 +84,8 @@ Collaboration adds a Kin-side service path:
 ```text
 browser_editor_adapter.js
   -> POST /api/commands/kinoffice action=session
-  -> POST /api/stream-connection/ws-ticket
-  -> WebSocket /stream-connection/ws?ticket=...&host=...&port=...&tls=0
-  -> Kin stream proxy
+  -> POST /api/commands/kinoffice action=collab_join|collab_send|collab_poll|collab_leave
+  -> kinoffice.cmd loopback bridge
   -> services/kinoffice-collab/kinoffice-collab.service from this repo
 ```
 

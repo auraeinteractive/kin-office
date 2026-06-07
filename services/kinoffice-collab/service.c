@@ -21,6 +21,12 @@
 #define KO_DEFAULT_PORT 19129
 
 typedef struct KoClient KoClient;
+typedef struct KoMsg KoMsg;
+
+struct KoMsg {
+    char* line;
+    KoMsg* next;
+};
 
 typedef struct KoLock {
     char key[256];
@@ -41,12 +47,16 @@ typedef struct KoRoom {
 
 struct KoClient {
     int fd;
+    char client_id[128];
     char username[KO_MAX_USER];
     char session_id[256];
     char document_id[KO_MAX_DOCUMENT_ID];
     char kin_path[KO_MAX_PATH];
     char file_type[KO_MAX_TYPE];
     int index_user;
+    int queued_count;
+    KoMsg* queue_head;
+    KoMsg* queue_tail;
     KoRoom* room;
     KoClient* next_in_room;
 };
@@ -91,6 +101,64 @@ static int write_line(int fd, const char* line)
     if (write_all(fd, line, n) != 0) return -1;
     if (n == 0 || line[n - 1] != '\n') return write_all(fd, "\n", 1);
     return 0;
+}
+
+static char* dup_line_without_newline(const char* line)
+{
+    if (!line) return NULL;
+    size_t n = strlen(line);
+    while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) n--;
+    char* out = (char*)malloc(n + 1);
+    if (!out) return NULL;
+    memcpy(out, line, n);
+    out[n] = '\0';
+    return out;
+}
+
+static void client_queue_line(KoClient* client, const char* line)
+{
+    if (!client || !line) return;
+    KoMsg* msg = (KoMsg*)calloc(1, sizeof(*msg));
+    if (!msg) return;
+    msg->line = dup_line_without_newline(line);
+    if (!msg->line) {
+        free(msg);
+        return;
+    }
+    if (client->queue_tail) client->queue_tail->next = msg;
+    else client->queue_head = msg;
+    client->queue_tail = msg;
+    client->queued_count++;
+    while (client->queued_count > 512 && client->queue_head) {
+        KoMsg* dead = client->queue_head;
+        client->queue_head = dead->next;
+        if (client->queue_tail == dead) client->queue_tail = NULL;
+        free(dead->line);
+        free(dead);
+        client->queued_count--;
+    }
+}
+
+static void client_send_line(KoClient* client, const char* line)
+{
+    if (!client || !line) return;
+    if (client->fd >= 0) (void)write_line(client->fd, line);
+    else client_queue_line(client, line);
+}
+
+static void client_free_queue(KoClient* client)
+{
+    if (!client) return;
+    KoMsg* msg = client->queue_head;
+    while (msg) {
+        KoMsg* next = msg->next;
+        free(msg->line);
+        free(msg);
+        msg = next;
+    }
+    client->queue_head = NULL;
+    client->queue_tail = NULL;
+    client->queued_count = 0;
 }
 
 static int read_line_dynamic(int fd, char** out)
@@ -193,6 +261,131 @@ static int json_get_string(const char* json, const char* key, char* out, size_t 
     return w > 0 ? 0 : -1;
 }
 
+static int json_get_raw_value(const char* json, const char* key, char* out, size_t cap)
+{
+    if (!json || !key || !out || cap < 2) return -1;
+    out[0] = '\0';
+    char pat[128];
+    snprintf(pat, sizeof(pat), "\"%s\"", key);
+    const char* p = strstr(json, pat);
+    if (!p) return -1;
+    p = strchr(p + strlen(pat), ':');
+    if (!p) return -1;
+    p++;
+    while (*p && isspace((unsigned char)*p)) p++;
+    const char* start = p;
+    int depth = 0;
+    int in_string = 0;
+    int escaped = 0;
+    do {
+        unsigned char c = (unsigned char)*p;
+        if (!c) break;
+        if (in_string) {
+            if (escaped) escaped = 0;
+            else if (c == '\\') escaped = 1;
+            else if (c == '"') in_string = 0;
+            p++;
+            continue;
+        }
+        if (c == '"') {
+            in_string = 1;
+            p++;
+            continue;
+        }
+        if (c == '{' || c == '[') {
+            depth++;
+            p++;
+            continue;
+        }
+        if (c == '}' || c == ']') {
+            if (depth <= 0) break;
+            depth--;
+            p++;
+            if (depth == 0) break;
+            continue;
+        }
+        if ((c == ',' || c == '\n' || c == '\r') && depth == 0) break;
+        p++;
+    } while (*p);
+    size_t n = (size_t)(p - start);
+    while (n > 0 && isspace((unsigned char)start[n - 1])) n--;
+    if (n == 0 || n + 1 > cap) return -1;
+    memcpy(out, start, n);
+    out[n] = '\0';
+    return 0;
+}
+
+static void append_json_string_literal_as_value(char* out, size_t cap, size_t* pos, const char* literal, size_t literal_len)
+{
+    if (!literal || literal_len == 0 || literal[0] != '"') {
+        json_escape_append(out, cap, pos, "");
+        return;
+    }
+    size_t copy = literal_len;
+    if (*pos + copy >= cap) copy = cap > *pos ? cap - *pos - 1 : 0;
+    if (copy > 0) {
+        memcpy(out + *pos, literal, copy);
+        *pos += copy;
+        out[*pos] = '\0';
+    }
+}
+
+static int append_change_objects_from_raw(char* out, size_t cap, size_t* p, const char* raw_changes, const char* user_id, const char* username)
+{
+    const char* raw = raw_changes;
+    int count = 0;
+    while (raw && isspace((unsigned char)*raw)) raw++;
+    *p += (size_t)snprintf(out + *p, cap - *p, "\"changes\":[");
+    if (raw && *raw == '[') {
+        raw++;
+        for (;;) {
+            while (*raw && isspace((unsigned char)*raw)) raw++;
+            if (*raw == ']') break;
+            if (*raw != '"') return count;
+            const char* start = raw;
+            raw++;
+            int escaped = 0;
+            while (*raw) {
+                if (escaped) escaped = 0;
+                else if (*raw == '\\') escaped = 1;
+                else if (*raw == '"') {
+                    raw++;
+                    break;
+                }
+                raw++;
+            }
+            if (count > 0) *p += (size_t)snprintf(out + *p, cap - *p, ",");
+            *p += (size_t)snprintf(out + *p, cap - *p, "{\"change\":");
+            append_json_string_literal_as_value(out, cap, p, start, (size_t)(raw - start));
+            *p += (size_t)snprintf(out + *p, cap - *p, ",\"user\":");
+            json_escape_append(out, cap, p, user_id);
+            *p += (size_t)snprintf(out + *p, cap - *p, ",\"useridoriginal\":");
+            json_escape_append(out, cap, p, username);
+            *p += (size_t)snprintf(out + *p, cap - *p, ",\"time\":%ld}", (long)time(NULL));
+            count++;
+            while (*raw && isspace((unsigned char)*raw)) raw++;
+            if (*raw == ',') {
+                raw++;
+                continue;
+            }
+            if (*raw == ']') break;
+            break;
+        }
+    } else if (raw && *raw == '"') {
+        size_t len = strlen(raw);
+        *p += (size_t)snprintf(out + *p, cap - *p, "{\"change\":");
+        append_json_string_literal_as_value(out, cap, p, raw, len);
+        *p += (size_t)snprintf(out + *p, cap - *p, ",\"user\":");
+        json_escape_append(out, cap, p, user_id);
+        *p += (size_t)snprintf(out + *p, cap - *p, ",\"useridoriginal\":");
+        json_escape_append(out, cap, p, username);
+        *p += (size_t)snprintf(out + *p, cap - *p, ",\"time\":%ld}", (long)time(NULL));
+        count = 1;
+    }
+    *p += (size_t)snprintf(out + *p, cap - *p, "]");
+    return count;
+}
+
 static int parse_hello_json(const char* line, KoClient* client)
 {
     if (json_get_string(line, "user", client->username, sizeof(client->username)) != 0) return -1;
@@ -202,7 +395,20 @@ static int parse_hello_json(const char* line, KoClient* client)
         snprintf(client->file_type, sizeof(client->file_type), "docx");
     if (json_get_string(line, "sessionId", client->session_id, sizeof(client->session_id)) != 0)
         client->session_id[0] = '\0';
+    if (json_get_string(line, "clientId", client->client_id, sizeof(client->client_id)) != 0)
+        client->client_id[0] = '\0';
     return 0;
+}
+
+static KoClient* room_find_client_by_id_locked(const char* client_id)
+{
+    if (!client_id || !*client_id) return NULL;
+    for (KoRoom* r = g_rooms; r; r = r->next) {
+        for (KoClient* c = r->clients; c; c = c->next_in_room) {
+            if (strcmp(c->client_id, client_id) == 0) return c;
+        }
+    }
+    return NULL;
 }
 
 static KoRoom* room_find_or_create_locked(KoClient* client)
@@ -226,7 +432,7 @@ static void room_broadcast_locked(KoRoom* room, KoClient* exclude, const char* l
     if (!room || !line) return;
     for (KoClient* c = room->clients; c; c = c->next_in_room) {
         if (c == exclude) continue;
-        (void)write_line(c->fd, line);
+        client_send_line(c, line);
     }
 }
 
@@ -336,7 +542,7 @@ static void handle_auth(KoClient* client)
     else p += (size_t)snprintf(msg + p, sizeof(msg) - p, "[]");
     p += (size_t)snprintf(msg + p, sizeof(msg) - p, "}\n");
     pthread_mutex_unlock(&g_rooms_lock);
-    write_line(client->fd, msg);
+    client_send_line(client, msg);
 }
 
 static void handle_get_lock(KoClient* client, const char* line)
@@ -370,7 +576,7 @@ static void handle_get_lock(KoClient* client, const char* line)
         held ? "{\"type\":\"getLock\",\"error\":\"Already locked\"}\n"
              : "{\"type\":\"getLock\",\"locks\":{\"document\":{\"user\":\"%s\",\"time\":%ld,\"block\":\"%s\"}}}\n",
         client->username, (long)time(NULL), block);
-    write_line(client->fd, msg);
+    client_send_line(client, msg);
     if (!held && client->room) {
         pthread_mutex_lock(&g_rooms_lock);
         room_broadcast_locked(client->room, client, msg);
@@ -382,7 +588,7 @@ static void handle_save_changes(KoClient* client, const char* line)
 {
     char changes[KO_MAX_LINE];
     changes[0] = '\0';
-    if (json_get_string(line, "changes", changes, sizeof(changes)) != 0) {
+    if (json_get_raw_value(line, "changes", changes, sizeof(changes)) != 0) {
         return;
     }
     pthread_mutex_lock(&g_rooms_lock);
@@ -396,22 +602,21 @@ static void handle_save_changes(KoClient* client, const char* line)
         char msg[KO_MAX_LINE + 1024];
         size_t p = 0;
         client_connection_id(client, user_id, sizeof(user_id));
+        p += (size_t)snprintf(msg + p, sizeof(msg) - p, "{\"type\":\"saveChanges\",");
+        int change_count = append_change_objects_from_raw(msg, sizeof(msg), &p, changes, user_id, client->username);
+        if (change_count <= 0) {
+            pthread_mutex_unlock(&g_rooms_lock);
+            return;
+        }
         p += (size_t)snprintf(msg + p, sizeof(msg) - p,
-            "{\"type\":\"saveChanges\",\"changes\":[{\"change\":");
-        json_escape_append(msg, sizeof(msg), &p, changes);
-        p += (size_t)snprintf(msg + p, sizeof(msg) - p, ",\"user\":");
-        json_escape_append(msg, sizeof(msg), &p, user_id);
-        p += (size_t)snprintf(msg + p, sizeof(msg) - p, ",\"useridoriginal\":");
-        json_escape_append(msg, sizeof(msg), &p, client->username);
-        p += (size_t)snprintf(msg + p, sizeof(msg) - p,
-            ",\"time\":%ld}],\"changesIndex\":%lu,\"syncChangesIndex\":%lu,\"endSaveChanges\":true}\n",
-            (long)time(NULL), idx, idx);
+            ",\"changesIndex\":%lu,\"syncChangesIndex\":%lu,\"endSaveChanges\":true}\n",
+            idx, idx);
         room_broadcast_locked(client->room, client, msg);
     }
     pthread_mutex_unlock(&g_rooms_lock);
     char ack[256];
     snprintf(ack, sizeof(ack), "{\"type\":\"unSaveLock\",\"index\":%lu,\"syncChangesIndex\":%lu,\"time\":%ld}\n", idx, idx, (long)time(NULL));
-    write_line(client->fd, ack);
+    client_send_line(client, ack);
 }
 
 static void handle_cursor(KoClient* client, const char* line)
@@ -449,7 +654,7 @@ static void handle_client_message(KoClient* client, const char* line)
         return;
     }
     if (strcmp(type, "isSaveLock") == 0) {
-        write_line(client->fd, "{\"type\":\"saveLock\",\"saveLock\":false}\n");
+        client_send_line(client, "{\"type\":\"saveLock\",\"saveLock\":false}\n");
         return;
     }
     if (strcmp(type, "saveChanges") == 0) {
@@ -466,6 +671,142 @@ static void handle_client_message(KoClient* client, const char* line)
     pthread_mutex_unlock(&g_rooms_lock);
 }
 
+static void append_client_queue_json(KoClient* client, char* out, size_t cap, size_t* p)
+{
+    *p += (size_t)snprintf(out + *p, cap - *p, "[");
+    int first = 1;
+    KoMsg* msg = client ? client->queue_head : NULL;
+    while (msg) {
+        KoMsg* next = msg->next;
+        if (!first) *p += (size_t)snprintf(out + *p, cap - *p, ",");
+        first = 0;
+        if (msg->line && (msg->line[0] == '{' || msg->line[0] == '[')) {
+            *p += (size_t)snprintf(out + *p, cap - *p, "%s", msg->line);
+        } else {
+            json_escape_append(out, cap, p, msg->line ? msg->line : "");
+        }
+        free(msg->line);
+        free(msg);
+        msg = next;
+    }
+    if (client) {
+        client->queue_head = NULL;
+        client->queue_tail = NULL;
+        client->queued_count = 0;
+    }
+    *p += (size_t)snprintf(out + *p, cap - *p, "]");
+}
+
+static void write_bridge_response(int fd, int ok, const char* message, KoClient* client)
+{
+    char* out = (char*)calloc(1, KO_MAX_LINE + 8192);
+    if (!out) {
+        write_line(fd, "{\"response\":\"fail\",\"message\":\"out of memory\"}");
+        return;
+    }
+    size_t p = 0;
+    p += (size_t)snprintf(out + p, KO_MAX_LINE + 8192 - p, "{\"response\":\"%s\"", ok ? "success" : "fail");
+    if (message && *message) {
+        p += (size_t)snprintf(out + p, KO_MAX_LINE + 8192 - p, ",\"message\":");
+        json_escape_append(out, KO_MAX_LINE + 8192, &p, message);
+    }
+    p += (size_t)snprintf(out + p, KO_MAX_LINE + 8192 - p, ",\"messages\":");
+    append_client_queue_json(client, out, KO_MAX_LINE + 8192, &p);
+    p += (size_t)snprintf(out + p, KO_MAX_LINE + 8192 - p, "}");
+    write_line(fd, out);
+    free(out);
+}
+
+static int parse_bridge_join_json(const char* line, KoClient* client)
+{
+    if (json_get_string(line, "clientId", client->client_id, sizeof(client->client_id)) != 0) return -1;
+    if (json_get_string(line, "user", client->username, sizeof(client->username)) != 0) return -1;
+    if (json_get_string(line, "documentId", client->document_id, sizeof(client->document_id)) != 0) return -1;
+    if (json_get_string(line, "path", client->kin_path, sizeof(client->kin_path)) != 0) return -1;
+    if (json_get_string(line, "fileType", client->file_type, sizeof(client->file_type)) != 0)
+        snprintf(client->file_type, sizeof(client->file_type), "docx");
+    if (json_get_string(line, "sessionId", client->session_id, sizeof(client->session_id)) != 0)
+        client->session_id[0] = '\0';
+    return 0;
+}
+
+static void handle_bridge_request(int fd, const char* line)
+{
+    char op[32];
+    char client_id[128];
+    if (json_get_string(line, "op", op, sizeof(op)) != 0) {
+        write_bridge_response(fd, 0, "missing bridge op", NULL);
+        return;
+    }
+
+    if (strcmp(op, "join") == 0) {
+        KoClient* client = (KoClient*)calloc(1, sizeof(*client));
+        if (!client || parse_bridge_join_json(line, client) != 0) {
+            free(client);
+            write_bridge_response(fd, 0, "invalid bridge join", NULL);
+            return;
+        }
+        client->fd = -1;
+        pthread_mutex_lock(&g_rooms_lock);
+        KoClient* existing = room_find_client_by_id_locked(client->client_id);
+        pthread_mutex_unlock(&g_rooms_lock);
+        if (existing) {
+            client_free_queue(client);
+            free(client);
+            pthread_mutex_lock(&g_rooms_lock);
+            room_send_participants_locked(existing->room);
+            pthread_mutex_unlock(&g_rooms_lock);
+            write_bridge_response(fd, 1, NULL, existing);
+            return;
+        }
+        room_join(client);
+        pthread_mutex_lock(&g_rooms_lock);
+        room_send_participants_locked(client->room);
+        pthread_mutex_unlock(&g_rooms_lock);
+        write_bridge_response(fd, 1, NULL, client);
+        return;
+    }
+
+    if (json_get_string(line, "clientId", client_id, sizeof(client_id)) != 0) {
+        write_bridge_response(fd, 0, "missing bridge clientId", NULL);
+        return;
+    }
+
+    pthread_mutex_lock(&g_rooms_lock);
+    KoClient* client = room_find_client_by_id_locked(client_id);
+    pthread_mutex_unlock(&g_rooms_lock);
+    if (!client) {
+        write_bridge_response(fd, 0, "bridge client is not joined", NULL);
+        return;
+    }
+
+    if (strcmp(op, "send") == 0) {
+        char message[KO_MAX_LINE];
+        if (json_get_raw_value(line, "message", message, sizeof(message)) != 0) {
+            write_bridge_response(fd, 0, "missing bridge message", client);
+            return;
+        }
+        handle_client_message(client, message);
+        write_bridge_response(fd, 1, NULL, client);
+        return;
+    }
+
+    if (strcmp(op, "poll") == 0) {
+        write_bridge_response(fd, 1, NULL, client);
+        return;
+    }
+
+    if (strcmp(op, "leave") == 0) {
+        room_leave(client);
+        write_bridge_response(fd, 1, NULL, client);
+        client_free_queue(client);
+        free(client);
+        return;
+    }
+
+    write_bridge_response(fd, 0, "unknown bridge op", client);
+}
+
 static void* client_thread(void* arg)
 {
     int fd = *(int*)arg;
@@ -475,6 +816,14 @@ static void* client_thread(void* arg)
         close(fd);
         return NULL;
     }
+    char first_type[64];
+    if (json_get_string(hello, "type", first_type, sizeof(first_type)) == 0 && strcmp(first_type, "bridge") == 0) {
+        handle_bridge_request(fd, hello);
+        free(hello);
+        close(fd);
+        return NULL;
+    }
+
     KoClient* client = (KoClient*)calloc(1, sizeof(*client));
     if (!client || parse_hello_json(hello, client) != 0) {
         free(hello);
@@ -498,6 +847,7 @@ static void* client_thread(void* arg)
     free(line);
     room_leave(client);
     close(fd);
+    client_free_queue(client);
     free(client);
     return NULL;
 }

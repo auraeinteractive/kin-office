@@ -1,0 +1,336 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kin Office Collaboration Diagnostic</title>
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #f7f7f4;
+            --panel: #ffffff;
+            --text: #1e2328;
+            --muted: #5b6470;
+            --border: #d9ded6;
+            --accent: #1f7a5b;
+            --accent-text: #ffffff;
+            --danger: #a83232;
+            --code: #f0f2ed;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #151719;
+                --panel: #202428;
+                --text: #eff2f0;
+                --muted: #aab2b8;
+                --border: #3a4248;
+                --accent: #4faf85;
+                --accent-text: #09110d;
+                --danger: #ff7b72;
+                --code: #111417;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        body { padding: 20px; }
+        main { max-width: 1120px; margin: 0 auto; display: grid; gap: 14px; }
+        h1 { margin: 0; font-size: 22px; font-weight: 650; }
+        p { margin: 0; color: var(--muted); }
+        section { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+        label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+        input, select, textarea, button {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            background: var(--panel);
+            font: inherit;
+        }
+        input, select, textarea { width: 100%; padding: 8px 9px; }
+        textarea { min-height: 74px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        button { padding: 8px 12px; cursor: pointer; }
+        button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 650; }
+        button:disabled { opacity: 0.55; cursor: not-allowed; }
+        .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .status { color: var(--muted); }
+        .status strong { color: var(--text); }
+        pre { margin: 0; padding: 12px; min-height: 320px; max-height: 56vh; overflow: auto; background: var(--code); border: 1px solid var(--border); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+        .error { color: var(--danger); }
+    </style>
+</head>
+<body>
+<main>
+    <header>
+        <h1>Kin Office Collaboration Diagnostic</h1>
+        <p>Runs inside Kin and proves the generic stream WebSocket path before Euro-Office collaboration is touched.</p>
+    </header>
+
+    <section>
+        <div class="grid">
+            <label>Target
+                <select id="target">
+                    <option value="echo">Echo service</option>
+                    <option value="collab">Collaboration service</option>
+                </select>
+            </label>
+            <label>Host
+                <input id="host" value="127.0.0.1" autocomplete="off">
+            </label>
+            <label>Port
+                <input id="port" value="19130" inputmode="numeric" autocomplete="off">
+            </label>
+            <label>TLS
+                <select id="tls">
+                    <option value="0">false</option>
+                    <option value="1">true</option>
+                </select>
+            </label>
+            <label>Kin path
+                <input id="kinPath" value="Work:KinOfficeCollabDiagnostic.docx" autocomplete="off">
+            </label>
+            <label>File type
+                <select id="fileType">
+                    <option value="docx">docx</option>
+                    <option value="xlsx">xlsx</option>
+                    <option value="pptx">pptx</option>
+                </select>
+            </label>
+        </div>
+    </section>
+
+    <section>
+        <label>Message
+            <textarea id="message">{"type":"diagnostic","message":"hello from Kin Office"}</textarea>
+        </label>
+        <div class="actions" style="margin-top:10px">
+            <button id="connect" class="primary">Connect</button>
+            <button id="send" disabled>Send Message</button>
+            <button id="auth" disabled>Send Auth</button>
+            <button id="close" disabled>Close</button>
+            <button id="clear">Clear Log</button>
+            <span class="status">State: <strong id="state">idle</strong></span>
+        </div>
+    </section>
+
+    <section>
+        <pre id="log"></pre>
+    </section>
+</main>
+
+<script>
+(function() {
+    'use strict';
+
+    var els = {
+        target: document.getElementById('target'),
+        host: document.getElementById('host'),
+        port: document.getElementById('port'),
+        tls: document.getElementById('tls'),
+        kinPath: document.getElementById('kinPath'),
+        fileType: document.getElementById('fileType'),
+        message: document.getElementById('message'),
+        connect: document.getElementById('connect'),
+        send: document.getElementById('send'),
+        auth: document.getElementById('auth'),
+        close: document.getElementById('close'),
+        clear: document.getElementById('clear'),
+        state: document.getElementById('state'),
+        log: document.getElementById('log')
+    };
+    var socket = null;
+    var collabSession = null;
+    var lineBuffer = '';
+
+    function now() {
+        try { return new Date().toISOString(); } catch (_error) { return String(Date.now()); }
+    }
+
+    function redact(value) {
+        return String(value || '').replace(/([?&]ticket=)[^&]+/g, '$1<redacted>');
+    }
+
+    function log(label, data, isError) {
+        var text = '[' + now() + '] ' + label;
+        if (data !== undefined) {
+            if (typeof data === 'string') text += ' ' + data;
+            else {
+                try { text += ' ' + JSON.stringify(data, null, 2); }
+                catch (_error) { text += ' ' + String(data); }
+            }
+        }
+        els.log.textContent += text + '\n';
+        if (isError) console.error('[KinOfficeCollabDiagnostic]', label, data);
+        else console.log('[KinOfficeCollabDiagnostic]', label, data);
+        els.log.scrollTop = els.log.scrollHeight;
+    }
+
+    function setState(value) {
+        els.state.textContent = value;
+        var open = socket && socket.readyState === WebSocket.OPEN;
+        els.connect.disabled = !!socket && socket.readyState === WebSocket.CONNECTING;
+        els.send.disabled = !open;
+        els.auth.disabled = !open || els.target.value !== 'collab';
+        els.close.disabled = !socket;
+    }
+
+    function parseJsonMaybe(text) {
+        try { return JSON.parse(text); } catch (_error) { return null; }
+    }
+
+    function commandSession() {
+        return fetch('/api/commands/kinoffice', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            body: new URLSearchParams({
+                action: 'session',
+                path: els.kinPath.value,
+                type: els.fileType.value
+            }).toString()
+        }).then(function(response) {
+            return response.text().then(function(text) {
+                var json = parseJsonMaybe(text);
+                log('session response', json || text);
+                if (!response.ok || !json || json.response !== 'success') {
+                    throw new Error(json && json.message ? String(json.message) : 'session request failed: HTTP ' + response.status);
+                }
+                return json;
+            });
+        });
+    }
+
+    function streamTicket() {
+        return fetch('/api/stream-connection/ws-ticket', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' }
+        }).then(function(response) {
+            return response.text().then(function(text) {
+                var json = parseJsonMaybe(text);
+                log('ticket response', json ? Object.assign({}, json, { ticket: json.ticket ? '<redacted>' : json.ticket }) : text);
+                if (!response.ok || !json || !json.ticket) {
+                    throw new Error(json && json.message ? String(json.message) : 'ticket request failed: HTTP ' + response.status);
+                }
+                return json;
+            });
+        });
+    }
+
+    function wsUrl(ticket) {
+        var path = ticket.wsPath || ticket.path || '/stream-connection/ws';
+        var url = new URL(path, window.location.origin);
+        url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        url.searchParams.set('ticket', ticket.ticket);
+        url.searchParams.set('host', ticket.host || els.host.value || '127.0.0.1');
+        url.searchParams.set('port', String(ticket.port || els.port.value || '19130'));
+        url.searchParams.set('tls', ticket.tls ? '1' : els.tls.value);
+        return url;
+    }
+
+    function helloMessage() {
+        var session = collabSession || {};
+        return {
+            type: 'hello',
+            user: session.user && session.user.id ? session.user.id : 'kin-diagnostic-user',
+            name: session.user && session.user.name ? session.user.name : 'Kin Diagnostic User',
+            sessionId: session.sessionId || 'diagnostic-session',
+            documentId: session.documentId || 'kin-office-diagnostic',
+            path: session.path || els.kinPath.value,
+            fileType: session.fileType || els.fileType.value
+        };
+    }
+
+    function sendJson(value) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+            log('send skipped', 'WebSocket is not open', true);
+            return;
+        }
+        var text = typeof value === 'string' ? value : JSON.stringify(value);
+        socket.send(text + '\n');
+        log('send', value);
+    }
+
+    function connect() {
+        if (socket) socket.close();
+        socket = null;
+        collabSession = null;
+        lineBuffer = '';
+        setState('requesting session');
+
+        var sessionPromise = els.target.value === 'collab' ? commandSession() : Promise.resolve(null);
+        sessionPromise.then(function(session) {
+            collabSession = session;
+            if (session && session.collab) {
+                els.host.value = session.collab.host || els.host.value;
+                els.port.value = session.collab.port || els.port.value;
+                els.tls.value = session.collab.tls ? '1' : '0';
+            }
+            setState('requesting ticket');
+            return streamTicket();
+        }).then(function(ticket) {
+            var url = wsUrl(ticket);
+            log('websocket url', redact(url.href));
+            setState('connecting');
+            socket = new WebSocket(url.href);
+            socket.onopen = function() {
+                log('open');
+                setState('open');
+                sendJson(helloMessage());
+            };
+            socket.onmessage = function(event) {
+                var raw = String(event.data || '');
+                log('message raw', raw);
+                lineBuffer += raw;
+                var index;
+                while ((index = lineBuffer.indexOf('\n')) !== -1) {
+                    var line = lineBuffer.slice(0, index).trim();
+                    lineBuffer = lineBuffer.slice(index + 1);
+                    if (!line) continue;
+                    log('message json', parseJsonMaybe(line) || line);
+                }
+            };
+            socket.onerror = function(event) {
+                log('error', { type: event && event.type ? event.type : 'error' }, true);
+            };
+            socket.onclose = function(event) {
+                log('close', { code: event.code, reason: event.reason, wasClean: event.wasClean });
+                socket = null;
+                setState('closed ' + event.code);
+            };
+            setState('connecting');
+        }).catch(function(error) {
+            log('failed', error && error.message ? error.message : String(error), true);
+            socket = null;
+            setState('failed');
+        });
+    }
+
+    els.connect.addEventListener('click', connect);
+    els.send.addEventListener('click', function() {
+        var text = els.message.value.trim();
+        sendJson(parseJsonMaybe(text) || text);
+    });
+    els.auth.addEventListener('click', function() {
+        sendJson({ type: 'auth', openCmd: {}, documentCallbackUrl: '', sessionTimeConnect: 0 });
+    });
+    els.close.addEventListener('click', function() {
+        if (socket) socket.close(1000, 'diagnostic close');
+    });
+    els.clear.addEventListener('click', function() {
+        els.log.textContent = '';
+    });
+    els.target.addEventListener('change', function() {
+        if (els.target.value === 'echo' && els.port.value === '19129') els.port.value = '19130';
+        if (els.target.value === 'collab' && els.port.value === '19130') els.port.value = '19129';
+        setState(socket ? els.state.textContent : 'idle');
+    });
+
+    log('ready', {
+        href: window.location.href,
+        origin: window.location.origin,
+        userAgent: navigator.userAgent
+    });
+    setState('idle');
+})();
+</script>
+</body>
+</html>

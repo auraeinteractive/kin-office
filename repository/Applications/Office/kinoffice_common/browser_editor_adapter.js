@@ -7,10 +7,53 @@
     var x2tPromise = null;
     var cachePurgePromise = null;
     var workingDirsReady = false;
-    // Collaboration is intentionally disabled for now. The service/transport
-    // prototype did not complete a reliable Euro-Office co-authoring handshake;
-    // see specs/plans/collaboration.md before re-enabling.
-    var KIN_OFFICE_COLLAB_ENABLED = false;
+    // This collaboration branch runs Euro-Office co-authoring by default and
+    // logs every boundary needed to prove or falsify the integration.
+    var KIN_OFFICE_COLLAB_DEFAULT_ENABLED = true;
+    var collabConfigPromise = null;
+
+    function collabLog(label, data) {
+        if (data !== undefined) console.log('[KinOfficeBrowser] Collaboration ' + label, data);
+        else console.log('[KinOfficeBrowser] Collaboration ' + label);
+    }
+
+    function collabWarn(label, data) {
+        if (data !== undefined) console.warn('[KinOfficeBrowser] Collaboration ' + label, data);
+        else console.warn('[KinOfficeBrowser] Collaboration ' + label);
+    }
+
+    function collabTrace(label, data) {
+        var entry = {
+            t: Date.now(),
+            label: label,
+            data: data === undefined ? null : data
+        };
+        try {
+            window.KinOfficeCollabTrace = window.KinOfficeCollabTrace || [];
+            window.KinOfficeCollabTrace.push(entry);
+            if (window.KinOfficeCollabTrace.length > 300) window.KinOfficeCollabTrace.shift();
+            window.KinOfficeCollabLast = entry;
+        } catch (_error) {}
+        collabLog(label, data);
+    }
+
+    function collabMessageSummary(data) {
+        if (!data || typeof data !== 'object') return { type: typeof data };
+        var summary = { type: data.type || '' };
+        if (data.docid) summary.docid = data.docid;
+        if (data.documentId) summary.documentId = data.documentId;
+        if (data.sessionId) summary.sessionId = data.sessionId;
+        if (data.indexUser !== undefined) summary.indexUser = data.indexUser;
+        if (data.result !== undefined) summary.result = data.result;
+        if (data.changesIndex !== undefined) summary.changesIndex = data.changesIndex;
+        if (data.syncChangesIndex !== undefined) summary.syncChangesIndex = data.syncChangesIndex;
+        if (data.endSaveChanges !== undefined) summary.endSaveChanges = data.endSaveChanges;
+        if (data.participants) summary.participants = data.participants.length;
+        if (data.messages) summary.messages = data.messages.length;
+        if (data.changes) summary.changes = Array.isArray(data.changes) ? data.changes.length : typeof data.changes;
+        if (data.user && data.user.id) summary.user = data.user.id;
+        return summary;
+    }
 
     function loadScript(src) {
         return new Promise(function(resolve, reject) {
@@ -793,71 +836,145 @@
         frame.contentWindow.postMessage(JSON.stringify(payload), window.location.origin);
     }
 
+    function collabLocalOverride() {
+        var value = '';
+        try {
+            value = new URL(window.location.href).searchParams.get('kinOfficeCollab') || '';
+        } catch (_error) {}
+        if (!value) {
+            try { value = window.localStorage.getItem('KinOfficeCollabEnabled') || ''; } catch (_error2) {}
+        }
+        value = String(value || '').toLowerCase();
+        if (value === '1' || value === 'true' || value === 'yes') return true;
+        return null;
+    }
+
+    function loadCollabConfig() {
+        if (collabConfigPromise) return collabConfigPromise;
+        collabConfigPromise = fetch('collab_config.json', {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { Accept: 'application/json' }
+        }).then(function(response) {
+            if (!response.ok) return null;
+            return response.json().catch(function() { return null; });
+        }).catch(function(error) {
+            collabWarn('config fetch failed', error && error.message ? error.message : String(error));
+            return null;
+        }).then(function(config) {
+            var override = collabLocalOverride();
+            var enabled = override !== null ? override : (config && config.enabled !== undefined ? !!config.enabled : KIN_OFFICE_COLLAB_DEFAULT_ENABLED);
+            var result = Object.assign({}, config || {}, { enabled: enabled });
+            collabLog('config', {
+                enabled: result.enabled,
+                override: override,
+                url: new URL('collab_config.json', window.location.href).href,
+                host: result.host || '127.0.0.1',
+                port: result.port || 19129,
+                tls: !!result.tls
+            });
+            return result;
+        });
+        return collabConfigPromise;
+    }
+
     function mintCollabSession(opts) {
-        if (!KIN_OFFICE_COLLAB_ENABLED) return Promise.resolve(null);
-        if (!opts || opts.isNew || !opts.kinPath) return Promise.resolve(null);
+        collabLog('probe start', {
+            fileName: opts && opts.fileName,
+            fileType: opts && opts.fileType,
+            kinPath: opts && opts.kinPath,
+            isNew: !!(opts && opts.isNew)
+        });
+        if (!opts || opts.isNew || !opts.kinPath) {
+            collabLog('not started: document has no existing Kin path');
+            return Promise.resolve(null);
+        }
         var sessionInfo = null;
         var configInfo = null;
-        return fetch('/api/commands/kinoffice', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-            body: new URLSearchParams({
-                action: 'session',
-                path: opts.kinPath,
-                type: opts.fileType || 'docx'
-            }).toString()
+        return loadCollabConfig().then(function(configJson) {
+            configInfo = configJson && typeof configJson === 'object' ? configJson : null;
+            if (!configInfo || !configInfo.enabled) {
+                collabWarn('blocked before Euro-Office: collab_config.json enabled=false; redeploy this branch with ./deploy.sh --to-kin');
+                return null;
+            }
+            return fetch('/api/commands/kinoffice', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+                body: new URLSearchParams({
+                    action: 'session',
+                    path: opts.kinPath,
+                    type: opts.fileType || 'docx'
+                }).toString()
+            });
         }).then(function(response) {
+            if (!response) return null;
             return response.json().catch(function() { return null; }).then(function(json) {
                 if (!response.ok || !json || json.response !== 'success') {
                     throw new Error((json && json.message) ? String(json.message) : 'Kin Office collaboration service is unavailable.');
                 }
                 sessionInfo = json;
-                return fetch('collab_config.json', {
-                    method: 'GET',
-                    credentials: 'same-origin',
-                    cache: 'no-store',
-                    headers: { Accept: 'application/json' }
-                }).then(function(configResponse) {
-                    return configResponse.ok ? configResponse.json().catch(function() { return null; }) : null;
-                }).catch(function() { return null; });
+                collabTrace('session response', {
+                    documentId: json.documentId,
+                    path: json.path,
+                    fileType: json.fileType,
+                    user: json.user
+                });
+                return sessionInfo;
             });
-        }).then(function(configJson) {
-            configInfo = configJson && typeof configJson === 'object' ? configJson : null;
-            return fetch('/api/stream-connection/ws-ticket', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { Accept: 'application/json' }
+        }).then(function(activeSession) {
+            if (!activeSession) return null;
+            var collab = sessionInfo || {};
+            collab.path = collab.path || opts.kinPath;
+            collab.fileType = collab.fileType || opts.fileType || 'docx';
+            collab.clientId = 'kin-office-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+            collab.collab = Object.assign({}, collab.collab || {}, configInfo || {});
+            if (!collab.collab.host) collab.collab.host = '127.0.0.1';
+            if (!collab.collab.port) collab.collab.port = 19129;
+            collabTrace('session ready', {
+                documentId: collab.documentId,
+                path: collab.path,
+                clientId: collab.clientId,
+                bridge: '/api/commands/kinoffice',
+                host: collab.collab.host,
+                port: collab.collab.port,
+                tls: !!collab.collab.tls
             });
-        }).then(function(response) {
-            return response.json().catch(function() { return null; }).then(function(json) {
-                if (!response.ok || !json || json.response !== 'ok' || !json.ticket) {
-                    throw new Error((json && json.message) ? String(json.message) : 'Kin Office collaboration WebSocket ticket unavailable.');
-                }
-                var collab = sessionInfo || {};
-                collab.ticket = json.ticket;
-                collab.wsPath = json.wsPath || '/stream-connection/ws';
-                collab.path = collab.path || opts.kinPath;
-                collab.fileType = collab.fileType || opts.fileType || 'docx';
-                collab.collab = Object.assign({}, collab.collab || {}, configInfo || {});
-                if (!collab.collab.host) collab.collab.host = '127.0.0.1';
-                if (!collab.collab.port) collab.collab.port = 19129;
-                return collab;
-            });
+            return collab;
         })
         .catch(function(error) {
-            console.warn('[KinOfficeBrowser] Collaboration disabled:', error && error.message ? error.message : error);
+            collabWarn('disabled', error && error.message ? error.message : error);
             return null;
+        });
+    }
+
+    function postCollabCommand(action, params) {
+        var body = new URLSearchParams(Object.assign({ action: action }, params || {}));
+        return fetch('/api/commands/kinoffice', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+            body: body.toString()
+        }).then(function(response) {
+            return response.json().catch(function() { return null; }).then(function(json) {
+                if (!response.ok || !json || json.response !== 'success') {
+                    throw new Error((json && json.message) ? String(json.message) : ('Kin Office collaboration command failed: ' + action));
+                }
+                return json;
+            });
         });
     }
 
     function createKinOfficeSocketFactory(collab) {
         return function kinOfficeSocketFactory() {
             var handlers = {};
-            var socket = null;
             var connected = false;
             var closed = false;
-            var lineBuffer = '';
+            var connecting = false;
+            var connectPromise = null;
+            var pollTimer = null;
+            var sendQueue = Promise.resolve();
 
             function emitLocal(name, data) {
                 var list = handlers[name] || [];
@@ -865,51 +982,66 @@
                     try { handler(data); } catch (error) { setTimeout(function() { throw error; }, 0); }
                 });
             }
+            function dispatchMessages(messages) {
+                (messages || []).forEach(function(data) {
+                    if (!data) return;
+                    collabTrace('command bridge inbound', collabMessageSummary(data));
+                    emitLocal('message', data);
+                });
+            }
+            function schedulePoll() {
+                if (closed || !connected || pollTimer) return;
+                pollTimer = setTimeout(function() {
+                    pollTimer = null;
+                    if (closed || !connected) return;
+                    postCollabCommand('collab_poll', {
+                        clientId: collab.clientId || ''
+                    }).then(function(json) {
+                        dispatchMessages(json.messages);
+                    }).catch(function(error) {
+                        collabWarn('command bridge poll failed', error && error.message ? error.message : String(error));
+                        emitLocal('connect_error', error);
+                    }).then(function() {
+                        schedulePoll();
+                    });
+                }, 350);
+            }
             function connect() {
-                if (socket || closed || !collab || !collab.ticket || !collab.wsPath) return;
-                var url = new URL(collab.wsPath, window.location.origin);
-                url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                url.searchParams.set('ticket', collab.ticket);
-                url.searchParams.set('host', collab.collab && collab.collab.host ? collab.collab.host : '127.0.0.1');
-                url.searchParams.set('port', String(collab.collab && collab.collab.port ? collab.collab.port : 19129));
-                url.searchParams.set('tls', collab.collab && collab.collab.tls ? '1' : '0');
-                socket = new WebSocket(url.href);
-                socket.onopen = function() {
-                    console.log('[KinOfficeBrowser] Collaboration WebSocket open ' + url.href);
-                    socket.send(JSON.stringify({
-                        type: 'hello',
-                        user: collab.user && collab.user.id ? collab.user.id : 'kin-user',
-                        name: collab.user && collab.user.name ? collab.user.name : 'Kin User',
-                        sessionId: collab.sessionId || '',
-                        documentId: collab.documentId || '',
-                        path: collab.path || '',
-                        fileType: collab.fileType || 'docx'
-                    }) + '\n');
+                if (connected) return Promise.resolve();
+                if (connecting && connectPromise) return connectPromise;
+                if (closed || !collab || !collab.clientId) return Promise.reject(new Error('Kin Office collaboration bridge is closed.'));
+                connecting = true;
+                collabTrace('command bridge join attempt', {
+                    clientId: collab.clientId || '',
+                    documentId: collab.documentId || '',
+                    path: collab.path || ''
+                });
+                connectPromise = postCollabCommand('collab_join', {
+                    clientId: collab.clientId || '',
+                    documentId: collab.documentId || '',
+                    path: collab.path || '',
+                    type: collab.fileType || 'docx'
+                }).then(function(json) {
+                    connecting = false;
                     connected = true;
+                    collabTrace('command bridge joined', {
+                        clientId: collab.clientId || '',
+                        user: collab.user && collab.user.id ? collab.user.id : 'kin-user',
+                        messages: json.messages ? json.messages.length : 0
+                    });
                     emitLocal('connect');
-                };
-                socket.onmessage = function(event) {
-                    lineBuffer += String(event.data || '');
-                    var index;
-                    while ((index = lineBuffer.indexOf('\n')) !== -1) {
-                        var line = lineBuffer.slice(0, index).trim();
-                        lineBuffer = lineBuffer.slice(index + 1);
-                        if (!line) continue;
-                        var data = null;
-                        try { data = JSON.parse(line); } catch (_error) { data = null; }
-                        if (data) emitLocal('message', data);
-                    }
-                };
-                socket.onerror = function(event) {
-                    console.warn('[KinOfficeBrowser] Collaboration WebSocket error', event);
-                    emitLocal('connect_error', event);
-                };
-                socket.onclose = function(event) {
-                    console.warn('[KinOfficeBrowser] Collaboration WebSocket closed', event && event.code, event && event.reason);
-                    socket = null;
-                    if (connected) emitLocal('disconnect', event && event.reason ? event.reason : 'closed');
+                    dispatchMessages(json.messages);
+                    schedulePoll();
+                    return json;
+                }).catch(function(error) {
+                    connecting = false;
                     connected = false;
-                };
+                    connectPromise = null;
+                    collabWarn('command bridge join failed', error && error.message ? error.message : String(error));
+                    emitLocal('connect_error', error);
+                    throw error;
+                });
+                return connectPromise;
             }
             var shim = {
                 io: {
@@ -934,21 +1066,35 @@
                 },
                 emit: function(name, data) {
                     if (name !== 'message') return shim;
-                    if (!socket || socket.readyState !== WebSocket.OPEN) connect();
-                    if (socket && socket.readyState === WebSocket.OPEN) {
-                        socket.send(JSON.stringify(data || {}) + '\n');
-                    } else {
-                        setTimeout(function() {
-                            if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(data || {}) + '\n');
-                        }, 50);
-                    }
+                    collabTrace('EuroOffice outbound', collabMessageSummary(data));
+                    sendQueue = sendQueue.then(function() {
+                        if (closed) return null;
+                        return connect().then(function() {
+                            return postCollabCommand('collab_send', {
+                                clientId: collab.clientId || '',
+                                message: JSON.stringify(data || {})
+                            });
+                        }).then(function(json) {
+                            dispatchMessages(json.messages);
+                        });
+                    }).catch(function(error) {
+                        collabWarn('command bridge send failed', error && error.message ? error.message : String(error));
+                        emitLocal('connect_error', error);
+                    });
                     return shim;
                 },
-                connect: function() { connect(); return shim; },
+                connect: function() { connect().catch(function() {}); return shim; },
                 disconnect: function() {
                     closed = true;
-                    if (socket) socket.close();
-                    socket = null;
+                    if (pollTimer) {
+                        clearTimeout(pollTimer);
+                        pollTimer = null;
+                    }
+                    if (connected && collab && collab.clientId) {
+                        postCollabCommand('collab_leave', { clientId: collab.clientId }).catch(function(error) {
+                            collabWarn('command bridge leave failed', error && error.message ? error.message : String(error));
+                        });
+                    }
                     connected = false;
                     return shim;
                 }
@@ -966,11 +1112,11 @@
             inner.IS_NATIVE_EDITOR = false;
             inner.AscCommon = inner.AscCommon || {};
             inner.AscCommon.getSocketIO = function() {
-                console.log('[KinOfficeBrowser] Collaboration getSocketIO requested');
+                collabTrace('getSocketIO requested');
                 return createKinOfficeSocketFactory(collab);
             };
             inner.AscCommon.JQi = function() {
-                console.log('[KinOfficeBrowser] Collaboration JQi socket factory requested');
+                collabTrace('JQi socket factory requested');
                 return createKinOfficeSocketFactory(collab);
             };
             inner.SockJS = createKinOfficeSockJsBridge(collab);
@@ -985,7 +1131,7 @@
         var owner = null;
         return {
             open: function(settings) {
-                console.log('[KinOfficeBrowser] Collaboration SockJS bridge open');
+                collabTrace('SockJS bridge open', { hasSettings: !!settings });
                 owner = this;
                 var factory = createKinOfficeSocketFactory(collab);
                 socket = factory(settings || {});
@@ -1155,6 +1301,20 @@
         return false;
     }
 
+    function forceCoAuthoringOnline(coApi) {
+        if (!coApi || typeof coApi !== 'object') return false;
+        var changed = false;
+        ['_onlineWork', 'cV'].forEach(function(key) {
+            try {
+                if (coApi[key] !== true) {
+                    coApi[key] = true;
+                    changed = true;
+                }
+            } catch (_error) {}
+        });
+        return changed;
+    }
+
     function coAuthoringState(coApi) {
         if (!coApi) return 0;
         if (typeof coApi.get_state === 'function') return Number(coApi.get_state() || 0);
@@ -1168,6 +1328,111 @@
         if (typeof coApi.vxe === 'function') return coApi.vxe(); // minified CDocsCoApi.getUsers
     }
 
+    function coAuthoringTransport(coApi) {
+        return coApi && (coApi.On || coApi.Nva || coApi._CoAuthoringApi) || null;
+    }
+
+    function describeCoAuthoring(coApi) {
+        var transport = coAuthoringTransport(coApi);
+        var socket = transport && (transport.socketio || transport.zha);
+        return {
+            state: coAuthoringState(coApi),
+            online: coAuthoringOnline(coApi),
+            urlReady: coAuthoringUrlReady(coApi),
+            isAuth: !!(transport && (transport._isAuth || transport.pca)),
+            indexUser: transport && (transport._indexUser !== undefined ? transport._indexUser : transport.XBa),
+            userConnectionId: transport && (transport._userId || transport.Fn),
+            hasTransport: !!transport,
+            hasSocket: !!socket,
+            outerOnlineKeys: coApi ? objectPropertyNames(coApi).filter(function(key) {
+                return key === '_onlineWork' || key === 'cV' || key.toLowerCase().indexOf('online') >= 0;
+            }).slice(0, 12) : [],
+            transportKeys: transport ? objectPropertyNames(transport).slice(0, 35) : [],
+            socketKeys: socket ? objectPropertyNames(socket).slice(0, 25) : []
+        };
+    }
+
+    function wrapFunctionOnce(object, name, label, mapper) {
+        try {
+            if (!object || typeof object[name] !== 'function') return false;
+            var mark = '_kinTraceWrapped_' + name;
+            if (object[mark]) return true;
+            var original = object[name];
+            object[mark] = true;
+            object[name] = function() {
+                var args = Array.prototype.slice.call(arguments);
+                try {
+                    collabTrace(label, mapper ? mapper(args) : { args: args.length });
+                } catch (_error) {}
+                return original.apply(this, arguments);
+            };
+            return true;
+        } catch (error) {
+            collabWarn('trace wrap failed', { name: name, error: error && error.message ? error.message : String(error) });
+            return false;
+        }
+    }
+
+    function installCoAuthoringTrace(coApi) {
+        if (!coApi || coApi._kinTraceInstalled) return;
+        coApi._kinTraceInstalled = true;
+        [
+            ['callback_OnAuthParticipantsChanged', 'EuroOffice callback authParticipants', function(args) {
+                return { users: args[0] ? Object.keys(args[0]).length : 0, id: args[1] || null };
+            }],
+            ['callback_OnParticipantsChanged', 'EuroOffice callback participants', function(args) {
+                return { users: args[0] ? Object.keys(args[0]).length : 0 };
+            }],
+            ['callback_OnConnectionStateChanged', 'EuroOffice callback connectionState', function(args) {
+                var user = args[0] || {};
+                return { id: user.asc_getId ? user.asc_getId() : user.id, state: user.asc_getState ? user.asc_getState() : user.state };
+            }],
+            ['callback_OnStartCoAuthoring', 'EuroOffice callback startCoAuthoring', function(args) {
+                return { isWaitAuth: !!args[1] };
+            }],
+            ['callback_OnEndCoAuthoring', 'EuroOffice callback endCoAuthoring', function() {
+                return {};
+            }],
+            ['callback_OnCursor', 'EuroOffice callback cursor', function(args) {
+                return { messages: args[0] && args[0].length };
+            }],
+            ['callback_OnSaveChanges', 'EuroOffice callback saveChanges', function(args) {
+                return { changes: args[0] && args[0].length, userId: args[1] || null, firstLoad: !!args[2] };
+            }],
+            ['callback_OnChangesIndex', 'EuroOffice callback changesIndex', function(args) {
+                return { changesIndex: args[0] };
+            }],
+            ['callback_OnLocksAcquired', 'EuroOffice callback lockAcquired', function(args) {
+                return args[0] || {};
+            }],
+            ['callback_OnLocksReleased', 'EuroOffice callback lockReleased', function(args) {
+                return { lock: args[0] || {}, withChanges: !!args[1] };
+            }],
+            ['callback_OnDisconnect', 'EuroOffice callback disconnect', function(args) {
+                return { reason: args[0] || '', code: args[1] || null };
+            }],
+            ['callback_OnFirstConnect', 'EuroOffice callback firstConnect', function() {
+                return {};
+            }],
+            ['callback_OnSetIndexUser', 'EuroOffice callback indexUser', function(args) {
+                return { indexUser: args[0] };
+            }]
+        ].forEach(function(item) {
+            wrapFunctionOnce(coApi, item[0], item[1], item[2]);
+        });
+        var transport = coAuthoringTransport(coApi);
+        wrapFunctionOnce(transport, '_onServerMessage', 'EuroOffice server message dispatch', function(args) {
+            return collabMessageSummary(args[0]);
+        });
+        wrapFunctionOnce(transport, 'w5h', 'EuroOffice server message dispatch', function(args) {
+            return collabMessageSummary(args[0]);
+        });
+        wrapFunctionOnce(transport, '_send', 'EuroOffice internal send', function(args) {
+            return collabMessageSummary(args[0]);
+        });
+        collabTrace('EuroOffice trace installed', describeCoAuthoring(coApi));
+    }
+
     function installDirectCoAuthoringTransport(coApi, collab) {
         var transport = coApi && (coApi.On || coApi.Nva);
         if (!transport || transport._kinDirectTransportInstalled) return false;
@@ -1175,7 +1440,7 @@
         transport._kinDirectTransportInstalled = true;
         transport.zha = socket;
         socket.on('connect', function() {
-            console.log('[KinOfficeBrowser] Collaboration direct transport connected');
+            collabTrace('direct transport connected', describeCoAuthoring(coApi));
             try {
                 if (typeof transport.x5h === 'function') transport.x5h();
                 else transport.KK = 1;
@@ -1183,9 +1448,11 @@
         });
         socket.on('message', function(data) {
             try {
+                collabTrace('direct transport inbound dispatch', collabMessageSummary(data));
                 if (typeof transport.w5h === 'function') transport.w5h(data);
+                else if (typeof transport._onServerMessage === 'function') transport._onServerMessage(data);
             } catch (error) {
-                console.warn('[KinOfficeBrowser] Collaboration direct message failed:', error && error.message ? error.message : error);
+                collabWarn('direct message failed', error && error.message ? error.message : error);
             }
         });
         socket.on('disconnect', function(reason) {
@@ -1262,7 +1529,14 @@
         });
         if (bestScore >= 8) {
             if (!api.CoAuthoringApi) api.CoAuthoringApi = best;
-            console.log('[KinOfficeBrowser] Found CoAuthoringApi as ' + bestKey + ' score=' + bestScore);
+            collabTrace('CoAuthoringApi found', {
+                path: bestKey,
+                score: bestScore,
+                methods: objectPropertyNames(best).filter(function(key) {
+                    try { return typeof best[key] === 'function'; } catch (_error) { return false; }
+                }).slice(0, 60),
+                state: coAuthoringState(best)
+            });
             return best;
         }
         try {
@@ -1279,7 +1553,7 @@
                     }).slice(0, 80)
                 };
             });
-            console.warn('[KinOfficeBrowser] CoAuthoringApi candidates not found. API diagnostics:', details);
+            collabWarn('CoAuthoringApi candidates not found', details);
         } catch (_error) {}
         return null;
     }
@@ -1335,15 +1609,31 @@
             if (!api || !coApi || (!coApi.init && !coApi.Qe) || typeof coApi.auth !== 'function') {
                 throw new Error('CoAuthoringApi is not ready.');
             }
-            if (coAuthoringOnline(coApi)) return;
-            coAuthoringSetUrl(coApi, '/stream-connection/ws');
-            forceCoAuthoringUrlOnObject(coApi, '/stream-connection/ws', 0);
-            console.log('[KinOfficeBrowser] Collaboration URL ready=' + coAuthoringUrlReady(coApi));
+            installCoAuthoringTrace(coApi);
+            if (coAuthoringOnline(coApi)) {
+                collabTrace('already online', describeCoAuthoring(coApi));
+                return;
+            }
+            coAuthoringSetUrl(coApi, '/api/commands/kinoffice');
+            forceCoAuthoringUrlOnObject(coApi, '/api/commands/kinoffice', 0);
+            collabTrace('URL gate', describeCoAuthoring(coApi));
             var user = ensureCoAuthoringUser(inner, api, collab);
             if (!user) throw new Error('CoAuthoring user is not ready.');
+            collabTrace('user ready', {
+                id: user.asc_getId ? user.asc_getId() : user.id,
+                idOriginal: user.asc_getIdOriginal ? user.asc_getIdOriginal() : user.idOriginal,
+                name: user.asc_getUserName ? user.asc_getUserName() : user.userName
+            });
             api.documentId = collab.documentId || api.documentId;
             api.documentShardKey = collab.documentId || api.documentShardKey;
             if (api.DocInfo && collab.documentId && typeof api.DocInfo.put_Id === 'function') api.DocInfo.put_Id(collab.documentId);
+            collabTrace('init start', {
+                documentId: collab.documentId || api.documentId,
+                shardKey: collab.documentId || api.documentShardKey,
+                editorId: api.editorId,
+                formatSave: api.documentFormatSave,
+                state: coAuthoringState(coApi)
+            });
             coAuthoringInit(
                 coApi,
                 user,
@@ -1359,13 +1649,30 @@
                 api.headingsColor,
                 null
             );
-            installDirectCoAuthoringTransport(coApi, collab);
+            collabTrace('init complete', describeCoAuthoring(coApi));
+            collabTrace('direct transport install', {
+                installed: installDirectCoAuthoringTransport(coApi, collab),
+                state: describeCoAuthoring(coApi)
+            });
+            if (!coAuthoringOnline(coApi)) {
+                collabTrace('force online wrapper', {
+                    changed: forceCoAuthoringOnline(coApi),
+                    state: describeCoAuthoring(coApi)
+                });
+            }
             waitAndAuthCoAuthoring(coApi, 50);
-            console.log('[KinOfficeBrowser] Collaboration connected for ' + (collab.path || collab.documentId || 'document'));
+            collabTrace('start requested', {
+                path: collab.path || '',
+                documentId: collab.documentId || '',
+                state: describeCoAuthoring(coApi)
+            });
         } catch (error) {
             if ((attemptsLeft || 0) <= 0) {
-                console.warn('[KinOfficeBrowser] Collaboration could not start:', error && error.message ? error.message : error);
+                collabWarn('could not start', error && error.message ? error.message : error);
                 return;
+            }
+            if ((attemptsLeft || 0) % 10 === 0) {
+                collabTrace('waiting for CoAuthoringApi', { attemptsLeft: attemptsLeft, error: error && error.message ? error.message : String(error) });
             }
             setTimeout(function() {
                 startKinCoAuthoring(fileType, collab, attemptsLeft - 1);
@@ -1376,16 +1683,33 @@
     function waitAndAuthCoAuthoring(coApi, attemptsLeft) {
         try {
             if (!coApi || typeof coApi.auth !== 'function') return;
-            if (coAuthoringState(coApi) > 0) {
-                console.log('[KinOfficeBrowser] Collaboration auth start state=' + coAuthoringState(coApi));
+            var state = coAuthoringState(coApi);
+            if (state === 2) {
+                collabTrace('already authorized', describeCoAuthoring(coApi));
+                return;
+            }
+            if (state === 3 || state === 4) {
+                collabWarn('closed before auth', describeCoAuthoring(coApi));
+                return;
+            }
+            if (state === 1) {
+                collabTrace('auth start', describeCoAuthoring(coApi));
                 coApi.auth(false, null);
-                setTimeout(function() { try { coAuthoringGetUsers(coApi); } catch (_error) {} }, 500);
+                setTimeout(function() {
+                    try {
+                        coAuthoringGetUsers(coApi);
+                        collabTrace('post-auth state', describeCoAuthoring(coApi));
+                    } catch (_error) {}
+                }, 500);
                 return;
             }
         } catch (_error) {}
         if ((attemptsLeft || 0) <= 0) {
-            console.warn('[KinOfficeBrowser] Collaboration socket did not become ready for auth.');
+            collabWarn('socket did not become ready for auth', describeCoAuthoring(coApi));
             return;
+        }
+        if ((attemptsLeft || 0) % 10 === 0) {
+            collabTrace('waiting for auth-ready state', describeCoAuthoring(coApi));
         }
         setTimeout(function() {
             waitAndAuthCoAuthoring(coApi, attemptsLeft - 1);
@@ -1412,6 +1736,13 @@
         var fileName = String(opts.fileName || 'Document.docx');
         var fileType = String(opts.fileType || fileName.split('.').pop() || 'docx').replace(/^\./, '').toLowerCase();
         var containerId = String(opts.containerId || 'editor');
+        collabLog('adapter create', {
+            fileName: fileName,
+            fileType: fileType,
+            kinPath: opts.kinPath || '',
+            isNew: !!opts.isNew,
+            hasBytes: !!(opts.bytes && opts.bytes.length)
+        });
         var sourcePromise = opts.isNew
             ? Promise.resolve({ bin: bytesForNewDocument(fileType), media: {} })
             : convertDocumentToBin(opts.bytes, fileName, fileType);
@@ -1505,6 +1836,12 @@
             sourcePayload = results[0].bin;
             sourceMedia = results[0].media || {};
             collabSession = results[1] || null;
+            collabLog('editor config decision', {
+                enabled: !!collabSession,
+                coEditingMode: collabSession ? 'fast' : 'strict',
+                documentId: collabSession && collabSession.documentId,
+                path: collabSession && collabSession.path
+            });
             return loadApi();
         }).then(function() {
             var container = document.getElementById(containerId);

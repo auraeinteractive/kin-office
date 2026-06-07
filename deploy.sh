@@ -5,6 +5,12 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${ROOT}/.config.ini"
 DEPLOY_MODE=0
 INSTALL_TO_KIN=0
+KINOFFICE_COLLAB_ENABLE="${KINOFFICE_COLLAB_ENABLE:-1}"
+KINOFFICE_COLLAB_HOST="${KINOFFICE_COLLAB_HOST:-127.0.0.1}"
+KINOFFICE_COLLAB_PORT="${KINOFFICE_COLLAB_PORT:-19129}"
+KINOFFICE_COLLAB_DIAG_ECHO_ENABLE="${KINOFFICE_COLLAB_DIAG_ECHO_ENABLE:-0}"
+KINOFFICE_COLLAB_ECHO_HOST="${KINOFFICE_COLLAB_ECHO_HOST:-127.0.0.1}"
+KINOFFICE_COLLAB_ECHO_PORT="${KINOFFICE_COLLAB_ECHO_PORT:-19130}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,6 +20,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --to-kin)
       INSTALL_TO_KIN=1
+      shift
+      ;;
+    --collab-echo)
+      KINOFFICE_COLLAB_DIAG_ECHO_ENABLE=1
       shift
       ;;
     --restart)
@@ -27,6 +37,7 @@ Usage: $(basename "$0") [OPTIONS]
 Options:
   --deploy-mode   Production: install apps into /usr/lib/kin/repository/Applications
   --to-kin        Dev only: copy kinoffice_* into KIN_BUILD_PATH (never deletes Kin files)
+  --collab-echo   Start the optional loopback echo diagnostic service
   --restart       No-op kept for compatibility
   --help          Show this help
 
@@ -60,9 +71,6 @@ resolve_kin_build_path() {
 }
 
 KINOFFICE_APP_DIRS=(kinoffice_common kinoffice_docs kinoffice_sheets kinoffice_slides)
-KINOFFICE_COLLAB_ENABLE="${KINOFFICE_COLLAB_ENABLE:-0}"
-KINOFFICE_COLLAB_HOST="${KINOFFICE_COLLAB_HOST:-127.0.0.1}"
-KINOFFICE_COLLAB_PORT="${KINOFFICE_COLLAB_PORT:-19129}"
 
 KINOFFICE_COMMON_RUNTIME_EXCLUDE=(--exclude 'vendor/kin-office/source/')
 
@@ -155,10 +163,8 @@ install_apps() {
 install_kinoffice_cmd() {
   local commands_dir="$1"
   local cmd_src="${ROOT}/commands/kinoffice.cmd/kinoffice"
-  if [[ ! -x "${cmd_src}" ]]; then
-    echo "deploy.sh: building kinoffice command..."
-    "${ROOT}/scripts/build-kinoffice-cmd.sh"
-  fi
+  echo "deploy.sh: building kinoffice command..."
+  "${ROOT}/scripts/build-kinoffice-cmd.sh"
   if [[ ! -x "${cmd_src}" ]]; then
     echo "deploy.sh: ERROR: kinoffice command not built at ${cmd_src}" >&2
     exit 1
@@ -170,12 +176,15 @@ install_kinoffice_cmd() {
 
 build_kinoffice_collab_service() {
   local service_src="${ROOT}/services/kinoffice-collab/kinoffice-collab.service"
-  if [[ ! -x "${service_src}" ]]; then
-    echo "deploy.sh: building kinoffice-collab service..."
-    "${ROOT}/scripts/build-kinoffice-collab-service.sh"
-  fi
+  local echo_src="${ROOT}/services/kinoffice-collab/kinoffice-collab-echo.service"
+  echo "deploy.sh: building kinoffice-collab service..."
+  "${ROOT}/scripts/build-kinoffice-collab-service.sh"
   if [[ ! -x "${service_src}" ]]; then
     echo "deploy.sh: ERROR: kinoffice-collab service not built at ${service_src}" >&2
+    exit 1
+  fi
+  if [[ ! -x "${echo_src}" ]]; then
+    echo "deploy.sh: ERROR: kinoffice-collab echo service not built at ${echo_src}" >&2
     exit 1
   fi
 }
@@ -185,7 +194,9 @@ install_kinoffice_collab_service() {
   build_kinoffice_collab_service
   mkdir -p "${services_dir}"
   install -m 755 "${ROOT}/services/kinoffice-collab/kinoffice-collab.service" "${services_dir}/kinoffice-collab.service"
+  install -m 755 "${ROOT}/services/kinoffice-collab/kinoffice-collab-echo.service" "${services_dir}/kinoffice-collab-echo.service"
   echo "deploy.sh: installed ${services_dir}/kinoffice-collab.service"
+  echo "deploy.sh: installed ${services_dir}/kinoffice-collab-echo.service"
 }
 
 start_dev_kinoffice_collab_service() {
@@ -225,7 +236,7 @@ start_dev_kinoffice_collab_service() {
       fi
     done < <(ss -ltnp 2>/dev/null | awk -v port=":${KINOFFICE_COLLAB_PORT}" '$4 ~ port"$" { print $0 }' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u)
   fi
-  KINOFFICE_COLLAB_HOST="${KINOFFICE_COLLAB_HOST}" KINOFFICE_COLLAB_PORT="${KINOFFICE_COLLAB_PORT}" \
+  nohup env KINOFFICE_COLLAB_HOST="${KINOFFICE_COLLAB_HOST}" KINOFFICE_COLLAB_PORT="${KINOFFICE_COLLAB_PORT}" \
     "${service_bin}" --host "${KINOFFICE_COLLAB_HOST}" --port "${KINOFFICE_COLLAB_PORT}" \
     > "${runtime_dir}/kinoffice-collab.log" 2>&1 &
   printf '%s\n' "$!" > "${pid_file}"
@@ -255,12 +266,65 @@ stop_dev_kinoffice_collab_service() {
   fi
 }
 
+start_dev_kinoffice_collab_echo_service() {
+  local service_bin="$1"
+  local runtime_dir="${XDG_RUNTIME_DIR:-/tmp}/kin-office"
+  local pid_file="${runtime_dir}/kinoffice-collab-echo.pid"
+  mkdir -p "${runtime_dir}"
+  if [[ -f "${pid_file}" ]]; then
+    local old_pid
+    old_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if [[ -n "${old_pid}" ]] && kill -0 "${old_pid}" 2>/dev/null; then
+      echo "deploy.sh: stopping existing kinoffice-collab-echo pid=${old_pid}"
+      kill "${old_pid}" 2>/dev/null || true
+    fi
+    rm -f "${pid_file}"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    local port_pid
+    while read -r port_pid; do
+      if [[ -n "${port_pid}" ]] && kill -0 "${port_pid}" 2>/dev/null; then
+        echo "deploy.sh: stopping existing kinoffice-collab-echo listener pid=${port_pid} on port ${KINOFFICE_COLLAB_ECHO_PORT}"
+        kill "${port_pid}" 2>/dev/null || true
+      fi
+    done < <(ss -ltnp 2>/dev/null | awk -v port=":${KINOFFICE_COLLAB_ECHO_PORT}" '$4 ~ port"$" { print $0 }' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u)
+  fi
+  nohup env KINOFFICE_COLLAB_ECHO_HOST="${KINOFFICE_COLLAB_ECHO_HOST}" KINOFFICE_COLLAB_ECHO_PORT="${KINOFFICE_COLLAB_ECHO_PORT}" \
+    "${service_bin}" --host "${KINOFFICE_COLLAB_ECHO_HOST}" --port "${KINOFFICE_COLLAB_ECHO_PORT}" \
+    > "${runtime_dir}/kinoffice-collab-echo.log" 2>&1 &
+  printf '%s\n' "$!" > "${pid_file}"
+  echo "deploy.sh: started kinoffice-collab-echo.service pid=$! (${KINOFFICE_COLLAB_ECHO_HOST}:${KINOFFICE_COLLAB_ECHO_PORT})"
+}
+
+stop_dev_kinoffice_collab_echo_service() {
+  local runtime_dir="${XDG_RUNTIME_DIR:-/tmp}/kin-office"
+  local pid_file="${runtime_dir}/kinoffice-collab-echo.pid"
+  if [[ -f "${pid_file}" ]]; then
+    local old_pid
+    old_pid="$(cat "${pid_file}" 2>/dev/null || true)"
+    if [[ -n "${old_pid}" ]] && kill -0 "${old_pid}" 2>/dev/null; then
+      echo "deploy.sh: stopping disabled kinoffice-collab-echo pid=${old_pid}"
+      kill "${old_pid}" 2>/dev/null || true
+    fi
+    rm -f "${pid_file}"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    local port_pid
+    while read -r port_pid; do
+      if [[ -n "${port_pid}" ]] && kill -0 "${port_pid}" 2>/dev/null; then
+        echo "deploy.sh: stopping disabled kinoffice-collab-echo listener pid=${port_pid} on port ${KINOFFICE_COLLAB_ECHO_PORT}"
+        kill "${port_pid}" 2>/dev/null || true
+      fi
+    done < <(ss -ltnp 2>/dev/null | awk -v port=":${KINOFFICE_COLLAB_ECHO_PORT}" '$4 ~ port"$" { print $0 }' | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u)
+  fi
+}
+
 cd "${ROOT}"
 
 if [[ "${DEPLOY_MODE}" -eq 1 ]]; then
   install_apps "/usr/lib/kin/repository"
   install_kinoffice_cmd "/usr/lib/kin/commands"
-  if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" ]]; then
+  if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" || "${KINOFFICE_COLLAB_DIAG_ECHO_ENABLE}" == "1" ]]; then
     install_kinoffice_collab_service "/usr/lib/kin/services"
   fi
   echo "deploy.sh: Kin Office installed; no Docker, /ds/, or /direct/ endpoints are used"
@@ -294,12 +358,24 @@ export KIN_BUILD_PATH
 
 install_apps "${KIN_BUILD_PATH}/repository"
 install_kinoffice_cmd "${KIN_BUILD_PATH}/commands"
-if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" ]]; then
+if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" || "${KINOFFICE_COLLAB_DIAG_ECHO_ENABLE}" == "1" ]]; then
   install_kinoffice_collab_service "${KIN_BUILD_PATH}/services"
+fi
+if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" ]]; then
   start_dev_kinoffice_collab_service "${KIN_BUILD_PATH}/services/kinoffice-collab.service"
 else
   stop_dev_kinoffice_collab_service
-  echo "deploy.sh: collaboration disabled; not installing or starting kinoffice-collab.service"
+  echo "deploy.sh: collaboration disabled; not starting kinoffice-collab.service"
+fi
+if [[ "${KINOFFICE_COLLAB_DIAG_ECHO_ENABLE}" == "1" ]]; then
+  start_dev_kinoffice_collab_echo_service "${KIN_BUILD_PATH}/services/kinoffice-collab-echo.service"
+else
+  stop_dev_kinoffice_collab_echo_service
+  echo "deploy.sh: collaboration echo diagnostic disabled"
 fi
 echo "deploy.sh: Kin Office copied from ${ROOT} (Kin nginx not reloaded)"
+echo "deploy.sh: collaboration config enabled=${KINOFFICE_COLLAB_ENABLE}"
+if [[ "${KINOFFICE_COLLAB_ENABLE}" == "1" ]]; then
+  "${ROOT}/scripts/verify-kinoffice-collab-preflight.sh"
+fi
 echo "deploy.sh: verify read path — curl -skL 'https://127.0.0.1:9219/repository/kinoffice_common/office_app.js' | rg '/api/file/raw'"

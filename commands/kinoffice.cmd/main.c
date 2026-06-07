@@ -2,9 +2,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 
 #include "templates.h"
+
+static const char* g_argv0 = NULL;
 
 static const char* get_arg_value(int argc, char* argv[], const char* key)
 {
@@ -49,6 +56,37 @@ static void json_print_escaped(const char* value)
         }
     }
     putchar('"');
+}
+
+static void json_escape_append(char* out, size_t cap, size_t* pos, const char* value)
+{
+    const unsigned char* p = (const unsigned char*)(value ? value : "");
+    if (*pos + 1 >= cap) return;
+    out[(*pos)++] = '"';
+    while (*p && *pos + 8 < cap) {
+        unsigned char c = *p++;
+        if (c == '"' || c == '\\') {
+            out[(*pos)++] = '\\';
+            out[(*pos)++] = (char)c;
+        } else if (c == '\n') {
+            out[(*pos)++] = '\\';
+            out[(*pos)++] = 'n';
+        } else if (c == '\r') {
+            out[(*pos)++] = '\\';
+            out[(*pos)++] = 'r';
+        } else if (c == '\t') {
+            out[(*pos)++] = '\\';
+            out[(*pos)++] = 't';
+        } else if (c < 0x20) {
+            int n = snprintf(out + *pos, cap - *pos, "\\u%04x", c);
+            if (n < 0) return;
+            *pos += (size_t)n;
+        } else {
+            out[(*pos)++] = (char)c;
+        }
+    }
+    if (*pos < cap) out[(*pos)++] = '"';
+    if (*pos < cap) out[*pos] = '\0';
 }
 
 static int path_is_safe_host_file(const char* path)
@@ -217,8 +255,285 @@ static int handle_session(const char* username, const char* sessionid, const cha
     return 0;
 }
 
+static int collab_port(void)
+{
+    const char* port = getenv("KINOFFICE_COLLAB_PORT");
+    int n = port && *port ? atoi(port) : 19129;
+    return n > 0 && n <= 65535 ? n : 19129;
+}
+
+static const char* collab_host(void)
+{
+    const char* host = getenv("KINOFFICE_COLLAB_HOST");
+    return host && *host ? host : "127.0.0.1";
+}
+
+static int collab_host_is_loopback(const char* host)
+{
+    return host && (strcmp(host, "127.0.0.1") == 0 || strcmp(host, "localhost") == 0);
+}
+
+static int join_path(char* out, size_t cap, const char* a, const char* b)
+{
+    if (!out || !a || !b || cap == 0) return -1;
+    int n = snprintf(out, cap, "%s/%s", a, b);
+    return n > 0 && (size_t)n < cap ? 0 : -1;
+}
+
+static int dirname_of(const char* path, char* out, size_t cap)
+{
+    if (!path || !*path || !out || cap == 0) return -1;
+    const char* slash = strrchr(path, '/');
+    if (!slash) {
+        snprintf(out, cap, ".");
+        return 0;
+    }
+    size_t n = (size_t)(slash - path);
+    if (n == 0) n = 1;
+    if (n + 1 > cap) return -1;
+    memcpy(out, path, n);
+    out[n] = '\0';
+    return 0;
+}
+
+static int find_collab_service_bin(char* out, size_t cap)
+{
+    const char* configured = getenv("KINOFFICE_COLLAB_SERVICE");
+    if (configured && *configured && access(configured, X_OK) == 0) {
+        snprintf(out, cap, "%s", configured);
+        return 0;
+    }
+    char dir[4096];
+    if (dirname_of(g_argv0, dir, sizeof(dir)) != 0) return -1;
+    const char* candidates[] = {
+        "../services/kinoffice-collab.service",
+        "../../services/kinoffice-collab/kinoffice-collab.service",
+        "/usr/lib/kin/services/kinoffice-collab.service",
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++) {
+        char path[4096];
+        if (candidates[i][0] == '/') snprintf(path, sizeof(path), "%s", candidates[i]);
+        else if (join_path(path, sizeof(path), dir, candidates[i]) != 0) continue;
+        if (access(path, X_OK) == 0) {
+            snprintf(out, cap, "%s", path);
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int connect_collab_socket(const char* host, int port)
+{
+    const char* connect_host = (host && strcmp(host, "localhost") == 0) ? "127.0.0.1" : host;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, connect_host, &addr.sin_addr) != 1) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    return fd;
+}
+
+static void redirect_child_stdio(void)
+{
+    int fd = open("/dev/null", O_RDWR);
+    if (fd >= 0) {
+        dup2(fd, STDIN_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        dup2(fd, STDERR_FILENO);
+        if (fd > STDERR_FILENO) close(fd);
+    }
+}
+
+static int start_collab_service_if_needed(const char* host, int port)
+{
+    if (!collab_host_is_loopback(host)) return -1;
+    char service_bin[4096];
+    if (find_collab_service_bin(service_bin, sizeof(service_bin)) != 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        setsid();
+        redirect_child_stdio();
+        char port_arg[32];
+        snprintf(port_arg, sizeof(port_arg), "%d", port);
+        setenv("KINOFFICE_COLLAB_HOST", host, 1);
+        setenv("KINOFFICE_COLLAB_PORT", port_arg, 1);
+        execl(service_bin, service_bin, "--host", host, "--port", port_arg, (char*)NULL);
+        _exit(127);
+    }
+    return 0;
+}
+
+static int write_all(int fd, const char* data, size_t n)
+{
+    size_t off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, data + off, n - off);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return -1;
+        off += (size_t)w;
+    }
+    return 0;
+}
+
+static char* read_line_alloc(int fd)
+{
+    size_t cap = 4096;
+    size_t pos = 0;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    for (;;) {
+        char ch;
+        ssize_t n = read(fd, &ch, 1);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            free(out);
+            return NULL;
+        }
+        if (ch == '\n') break;
+        if (ch == '\r') continue;
+        if (pos + 2 >= cap) {
+            size_t next = cap * 2;
+            char* grown;
+            if (next > 2097152) {
+                free(out);
+                return NULL;
+            }
+            grown = (char*)realloc(out, next);
+            if (!grown) {
+                free(out);
+                return NULL;
+            }
+            out = grown;
+            cap = next;
+        }
+        out[pos++] = ch;
+    }
+    out[pos] = '\0';
+    return out;
+}
+
+static int collab_roundtrip(const char* request)
+{
+    const char* host = collab_host();
+    int port = collab_port();
+    int fd = connect_collab_socket(host, port);
+    if (fd < 0 && errno == EINVAL) {
+        print_fail("Invalid collaboration service host.");
+        return 1;
+    }
+    if (fd < 0) {
+        if (start_collab_service_if_needed(host, port) == 0) {
+            for (int i = 0; i < 20 && fd < 0; i++) {
+                usleep(50000);
+                fd = connect_collab_socket(host, port);
+            }
+        }
+    }
+    if (fd < 0) {
+        print_fail("Collaboration service is not reachable.");
+        return 1;
+    }
+    if (write_all(fd, request, strlen(request)) != 0 || write_all(fd, "\n", 1) != 0) {
+        close(fd);
+        print_fail("Could not send collaboration bridge request.");
+        return 1;
+    }
+    char* response = read_line_alloc(fd);
+    close(fd);
+    if (!response) {
+        print_fail("Collaboration service returned no response.");
+        return 1;
+    }
+    printf("%s\n", response);
+    free(response);
+    return 0;
+}
+
+static int raw_json_object_is_safe(const char* value)
+{
+    if (!value) return 0;
+    while (*value == ' ' || *value == '\t') value++;
+    if (*value != '{') return 0;
+    return strchr(value, '\n') == NULL && strchr(value, '\r') == NULL;
+}
+
+static int handle_collab_bridge(const char* action, const char* username, const char* sessionid,
+                                const char* client_id, const char* document_id,
+                                const char* path, const char* type, const char* message)
+{
+    if (!client_id || !*client_id) {
+        print_fail("Missing clientId for collaboration bridge.");
+        return 1;
+    }
+    const char* op = NULL;
+    if (strcmp(action, "collab_join") == 0) op = "join";
+    else if (strcmp(action, "collab_send") == 0) op = "send";
+    else if (strcmp(action, "collab_poll") == 0) op = "poll";
+    else if (strcmp(action, "collab_leave") == 0) op = "leave";
+    else {
+        print_fail("Unknown collaboration bridge action.");
+        return 1;
+    }
+    if (!username || !*username) username = "kin-user";
+    if (!sessionid) sessionid = "";
+    if (!type || !*type) type = "docx";
+    if (strcmp(op, "join") == 0 && (!document_id || !*document_id || !path || !*path)) {
+        print_fail("Missing documentId or path for collaboration join.");
+        return 1;
+    }
+    if (strcmp(op, "send") == 0 && !raw_json_object_is_safe(message)) {
+        print_fail("Invalid collaboration message JSON.");
+        return 1;
+    }
+
+    size_t cap = (message ? strlen(message) : 0) + 8192;
+    char* req = (char*)calloc(1, cap);
+    if (!req) {
+        print_fail("Out of memory.");
+        return 1;
+    }
+    size_t p = 0;
+    p += (size_t)snprintf(req + p, cap - p, "{\"type\":\"bridge\",\"op\":");
+    json_escape_append(req, cap, &p, op);
+    p += (size_t)snprintf(req + p, cap - p, ",\"clientId\":");
+    json_escape_append(req, cap, &p, client_id);
+    if (strcmp(op, "join") == 0) {
+        p += (size_t)snprintf(req + p, cap - p, ",\"user\":");
+        json_escape_append(req, cap, &p, username);
+        p += (size_t)snprintf(req + p, cap - p, ",\"sessionId\":");
+        json_escape_append(req, cap, &p, sessionid);
+        p += (size_t)snprintf(req + p, cap - p, ",\"documentId\":");
+        json_escape_append(req, cap, &p, document_id);
+        p += (size_t)snprintf(req + p, cap - p, ",\"path\":");
+        json_escape_append(req, cap, &p, path);
+        p += (size_t)snprintf(req + p, cap - p, ",\"fileType\":");
+        json_escape_append(req, cap, &p, type);
+    } else if (strcmp(op, "send") == 0) {
+        p += (size_t)snprintf(req + p, cap - p, ",\"message\":%s", message);
+    }
+    p += (size_t)snprintf(req + p, cap - p, "}");
+    int rc = collab_roundtrip(req);
+    free(req);
+    return rc;
+}
+
 int main(int argc, char* argv[])
 {
+    g_argv0 = argv[0];
     const char* action = get_arg_value(argc, argv, "action");
     const char* type = get_arg_value(argc, argv, "type");
     const char* input = get_arg_value(argc, argv, "input");
@@ -226,6 +541,9 @@ int main(int argc, char* argv[])
     const char* username = get_arg_value(argc, argv, "username");
     const char* sessionid = get_arg_value(argc, argv, "sessionid");
     const char* path = get_arg_value(argc, argv, "path");
+    const char* client_id = get_arg_value(argc, argv, "clientId");
+    const char* document_id = get_arg_value(argc, argv, "documentId");
+    const char* message = get_arg_value(argc, argv, "message");
     const char* manager_pid_arg = get_arg_value(argc, argv, "manager_pid");
     const char* manager_pid_env = getenv("KIN_MANAGER_PID");
     int manager_pid = 0;
@@ -253,7 +571,9 @@ int main(int argc, char* argv[])
         return handle_downloadas(input, output);
     if (strcmp(action, "session") == 0)
         return handle_session(username, sessionid, path, type);
+    if (strncmp(action, "collab_", 7) == 0)
+        return handle_collab_bridge(action, username, sessionid, client_id, document_id, path, type, message);
 
-    print_fail("Unknown action (supported: template, open, savefile, downloadas, session).");
+    print_fail("Unknown action (supported: template, open, savefile, downloadas, session, collab_join, collab_send, collab_poll, collab_leave).");
     return 1;
 }

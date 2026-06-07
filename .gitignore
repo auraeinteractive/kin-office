@@ -2,3 +2,8 @@
 build/
 .env
 dist/
+__pycache__/
+*.py[cod]
+services/kinoffice-collab/*.o
+services/kinoffice-collab/kinoffice-collab.service
+services/kinoffice-collab/kinoffice-collab-echo.service
