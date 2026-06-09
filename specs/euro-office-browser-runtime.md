@@ -128,9 +128,13 @@ Useful source-level/runtime save APIs:
 2. `api.asc_nativeGetFile3()`
 3. `api.asc_nativeGetFileData()` with a temporary `native.Save_End` capture
 
+Packaged/minified spreadsheet builds may expose a method shaped like source `asc_nativeGetFile3()` as `api.OZi()` with header key `hv`. Do not use it as the active Kin Sheets serializer without a regression test: it produced XLSX output/patches that either reopened empty or failed DOS package validation (`xl/workbook.xml` missing after patch rebuild). The current Sheets path deliberately relies on the `asc_nativeGetFileData()`/`native.Save_End` fallback and writes full XLSX files for normal Save/autosave.
+
 Do not use upstream `asc_Save()` or `downloadAs()` for Kin persistence. Those enter upstream server/collaboration save machinery. Kin save hooks intercept save requests and call Kin-owned export/write logic.
 
 For export, `browser_editor_adapter.js` serializes the current editor state through the source-level/native APIs above, preserves or creates a valid internal `DOCY/XLSY/PPTY` payload, and runs x2t back to DOCX/XLSX/PPTX. Kin then validates the returned bytes as a ZIP before writing them to the Kin filesystem.
+
+For Sheets export, the adapter first calls `api.asc_closeCellEditor()` and waits one browser frame. Without this, immediate `Ctrl+S` could serialize the workbook before the active cell edit had been committed, even though autosave later saved correctly after idle time.
 
 ## Collaboration Hooks
 
@@ -185,6 +189,7 @@ If Euro-Office changes `docscoapi.js`, `baseEditorsApi.asc_LoadDocument()`, co-a
 - Product text is changed to `Kin Office`.
 - Font preview thumbnails are disabled/guarded to avoid huge canvas allocation failures.
 - RequireJS `urlArgs` gets the current Kin Office cache id.
+- Sheets bottom tab labels are repaired in `browser_editor_adapter.js`, not in save code. The tab component already stores the sheet name in `data-label`; the adapter fills blank `#statusbar_bottom li.list-item[data-label] > span` text from that attribute for `xlsx` sessions.
 
 When bumping cache IDs, update both app wrapper files and `KIN_OFFICE_BUILD_ID` in the patch script, then rerun the patch script.
 

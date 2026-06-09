@@ -8,6 +8,7 @@ This directory is the working specification set for Kin Office. Agents should tr
 - [Kin Office Architecture](./kin-office-architecture.md)
 - [Kin Office Collaboration](./kin-office-collaboration.md)
 - [Font rendering bug (resolved)](./problems/font-problem.md)
+- [Sheets save and bottom-tab fixes](./problems/sheets-save-and-tabs.md)
 
 ## Current Scope
 
@@ -26,6 +27,8 @@ The current implementation deliberately uses a browser-owned open/export path:
 5. The adapter preserves valid no-base64 `DOCY/XLSY/PPTY` payloads and only wraps raw serializer bytes.
 6. Euro-Office edits in desktop-flavored browser mode.
 7. Kin-owned save hooks serialize editor state, convert back to OOXML bytes, and write through Kin file APIs.
+
+Sheets has app-specific persistence guards: before export the adapter commits any active cell edit, and normal Save/autosave uses verified full-file writes instead of the ZIP-member patch backend. Docs and Slides keep their existing patch-save behavior.
 
 ## Font Note
 

@@ -618,6 +618,11 @@ export function bootstrapKinOfficeApp(config) {
         }
     }
 
+    function isInvalidStagingPathError(error) {
+        const message = error && error.message ? String(error.message) : String(error || '');
+        return /\bInvalid staging_path\b/i.test(message);
+    }
+
     async function writeKinFileBytes(kinPath, bytes) {
         if (bytes.length >= KIN_WRITE_UPLOAD_THRESHOLD) {
             await uploadKinFileBytes(kinPath, bytes);
@@ -631,7 +636,12 @@ export function bootstrapKinOfficeApp(config) {
         });
         const json = await response.json().catch(function() { return null; });
         if (!response.ok || !json || json.response !== 'success') {
-            throw new Error((json && json.message) ? String(json.message) : 'Could not write file to Kin path');
+            const message = (json && json.message) ? String(json.message) : 'Could not write file to Kin path';
+            if (isInvalidStagingPathError(message)) {
+                await uploadKinFileBytes(kinPath, bytes);
+                return;
+            }
+            throw new Error(message);
         }
     }
 
@@ -715,7 +725,12 @@ export function bootstrapKinOfficeApp(config) {
             return { bytes, skipped: false };
         }
         const patchBytes = createOfficePackagePatchBytes(currentBaselineBytes, bytes);
-        await applyKinOfficePatch(currentKinPath, currentFileType, currentBaselineSha256, targetSha256, patchBytes, reason || 'save');
+        try {
+            await applyKinOfficePatch(currentKinPath, currentFileType, currentBaselineSha256, targetSha256, patchBytes, reason || 'save');
+        } catch (error) {
+            if (!isInvalidStagingPathError(error)) throw error;
+            await writeKinFileBytesSafe(currentKinPath, bytes);
+        }
         await updateBaseline(bytes);
         currentDirty = false;
         postToParent({ kinWorkspace: true, action: 'refreshAllDirectoryViews' });

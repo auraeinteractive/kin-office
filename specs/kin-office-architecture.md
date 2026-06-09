@@ -160,7 +160,7 @@ Save As flow:
 11. The verified bytes become the trusted patch baseline.
 12. Directory views are refreshed.
 
-Normal Save and Autosave do not full-overwrite the target file. They use an OOXML ZIP-member patch:
+Normal Save and Autosave for Docs and Slides do not full-overwrite the target file. They use an OOXML ZIP-member patch:
 
 1. `office_app.js` keeps a trusted baseline from open, successful Save, successful Autosave, or successful Save As.
 2. Save/Autosave exports the current editor state to full OOXML bytes and validates the ZIP header.
@@ -172,7 +172,11 @@ Normal Save and Autosave do not full-overwrite the target file. They use an OOXM
 8. The rebuilt Office ZIP is written to a same-directory temp file, synced, and atomically renamed over the target.
 9. On success, `office_app.js` updates the trusted baseline and clears dirty state.
 
-Autosave is debounced and uses the same patch backend as Save. If Autosave conflicts or fails, it does not alter the target file; it best-effort writes a same-directory recovery copy named like `.~autosave-<timestamp>-<filename>` and pauses Autosave for that document.
+Sheets currently does not use the ZIP-member patch backend for normal Save or Autosave. The Sheets patch path proved unreliable with browser-exported XLSX packages: the first Save As/full write could succeed, while later patch saves could rebuild a ZIP missing required spreadsheet members such as `xl/workbook.xml`. Therefore `office_app.js` handles `xlsx` Save and Autosave as full verified writes, then updates the trusted baseline. Keep this `xlsx` guard unless a dedicated Sheets patch regression test proves the patch path is safe.
+
+Autosave is debounced. For Docs and Slides it uses the same patch backend as Save. For Sheets it uses the same full verified write path as manual Save. If Autosave conflicts or fails, it does not alter the target file; it best-effort writes a same-directory recovery copy named like `.~autosave-<timestamp>-<filename>` and pauses Autosave for that document.
+
+If Kin rejects a `write_binary` or `patch_binary` save with `Invalid staging_path`, `office_app.js` treats that as a Kin staging transport failure. Small full writes retry through the chunked upload API. Docs/Slides patch saves fall back to a full verified upload only for this exact staging failure; normal patch conflicts and validation failures must still fail rather than overwrite the target.
 
 Kin Office save/autosave status messages are posted through `browser_editor.html` to `browser_editor_adapter.js`, which writes them into Euro-Office's own statusbar action label inside the existing `.status-group` element. The adapter prefers the editor's `Statusbar.setStatusCaption(...)` controller API and falls back to the DOM action label (`#label-action` for Docs/Sheets, `#status-label-action` for Slides) if needed.
 
@@ -192,6 +196,8 @@ Save/export details:
 - Native serializers may return either a complete `DOCY/XLSY/PPTY` payload or raw data plus a header. Complete internal payloads are passed through unchanged; raw data is wrapped with the correct header before x2t export.
 - Upstream `downloadAs()` and server callbacks are not used for Kin persistence.
 - `office_app.js` treats save as successful only after writing bytes to Kin and reading the saved path back to verify length.
+- For Sheets, `browser_editor_adapter.js` calls `api.asc_closeCellEditor()` and waits one browser frame before export. This is required because immediate `Ctrl+S` can fire while the active cell editor/formula bar still owns the pending value; autosave often appeared reliable only because idle time had already committed the edit.
+- For Sheets, `office_app.js` validates exported packages contain `[Content_Types].xml` and `xl/workbook.xml` before writing.
 
 ## App-Specific Notes
 
@@ -208,6 +214,10 @@ Save/export details:
 - `documentType` is `cell`.
 - Default file is `Spreadsheet.xlsx`.
 - Internal bin prefix is `XLSY`.
+- Normal Save and Autosave use full verified writes instead of the KOP1 patch backend.
+- Before export, the adapter closes the active cell editor and waits one frame so immediate keyboard Save includes the current cell value.
+- Do not use packaged minified `api.OZi()` as the primary Sheets serializer. It produced packages/patches that could save as empty or fail DOS validation. The safer current path remains `asc_nativeGetFileData()` via `native.Save_End` capture unless a targeted Sheets test proves otherwise.
+- The bottom sheet-tab labels are UI chrome, not canvas text. The adapter installs an `xlsx`-only DOM repair that restores tab text from each tab's `data-label` when Euro-Office renders an empty tab span.
 
 ### Slides
 
