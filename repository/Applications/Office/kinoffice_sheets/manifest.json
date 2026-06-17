@@ -4,5 +4,6 @@
   "version": "26",
   "entry": "app.js",
   "category": "Office",
+  "heroIcon": "table-cells",
   "published": true
 }
